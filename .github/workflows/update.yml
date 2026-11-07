@@ -1,0 +1,57 @@
+# Každých ~30 minut stáhne aktuální data, vyhodnotí webkamery a nasadí aplikaci na GitHub Pages.
+name: Aktualizace dat
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"   # každou půlhodinu (GitHub může spuštění o pár minut zpozdit)
+  workflow_dispatch:          # ruční spuštění v záložce Actions
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: write   # udržení plánovaného spouštění (viz poslední krok)
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Knihovna pro rozbor webkamer
+        run: pip install --quiet pillow
+
+      - id: pages
+        uses: actions/configure-pages@v6
+
+      - name: Stažení dat a sestavení stránky
+        run: python tools/build_static.py --out _site --prev-url "${{ steps.pages.outputs.base_url }}/"
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v5
+
+      # GitHub vypíná plánované úlohy v repozitářích bez aktivity 60 dní – tímhle je drží zapnuté.
+      - name: Udržení plánovaného spouštění
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/update.yml/enable"

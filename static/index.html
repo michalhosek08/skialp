@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Skialp CZ/SK</title>
+  <meta name="description" content="Podmínky pro skialpinismus v českých a slovenských horách – předpověď, sníh, laviny, webkamery a trasy na jedné mapě.">
+  <meta name="theme-color" content="#14324a">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Skialp">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2314324a'/%3E%3Cpath d='M6 50 24 20l9 14 7-9 18 25z' fill='%23e8f2fb'/%3E%3Cpath d='M24 20l5 8-5-2-4 4z' fill='%2314324a'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body class="side-open">
+  <header class="topbar">
+    <button id="btn-side" class="icon-btn" title="Přehled / panel" aria-label="Přepnout panel">☰</button>
+    <div class="brand"><span class="logo" aria-hidden="true"></span><b>Skialp</b><span>CZ / SK</span></div>
+    <div class="spacer"></div>
+    <button id="status" class="status-chip" title="Stav dat"><span class="dot"></span><span id="status-text">Načítám…</span></button>
+    <button id="btn-mobile" class="icon-btn" title="Otevřít na mobilu (QR kód)" aria-label="Otevřít na mobilu">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg>
+    </button>
+    <button id="btn-refresh" class="icon-btn" title="Obnovit data" aria-label="Obnovit data">⟳</button>
+    <button id="btn-layers" class="btn-layers" title="Vrstvy mapy"><span aria-hidden="true">◫</span> Vrstvy</button>
+  </header>
+  <div id="status-pop" class="popover hidden"></div>
+  <div id="demo-banner" class="demo-banner hidden"></div>
+
+  <main>
+    <aside id="sidebar">
+      <nav class="tabs">
+        <button data-view="overview" class="active">Přehled</button>
+        <button data-view="area">Oblast</button>
+        <button data-view="aval">Laviny</button>
+        <button data-view="cams">Kamery</button>
+      </nav>
+      <div id="view" class="view"></div>
+    </aside>
+
+    <div id="map"></div>
+
+    <aside id="layers" class="layers-panel"></aside>
+
+    <div id="slope-hint" class="map-hint hidden">Sklon svahů se zobrazí po přiblížení mapy</div>
+    <div id="hover" class="hover-read hidden"></div>
+    <div id="legend" class="legend hidden"></div>
+    <div id="timebar" class="timebar hidden">
+      <button id="tb-play" class="icon-btn" title="Přehrát" aria-label="Přehrát">▶</button>
+      <input id="tb-range" type="range" min="0" max="95" value="0" aria-label="Čas předpovědi">
+      <span id="tb-label" class="tb-label"></span>
+      <button id="tb-now" class="btn small ghost">Teď</button>
+    </div>
+  </main>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-body"><button class="close" aria-label="Zavřít">✕</button><div id="modal-content"></div></div>
+  </div>
+
+  <script>
+    // Otevřeno přímo ze souboru (dvojklikem na index.html) – bez serveru aplikace nefunguje.
+    if (location.protocol === 'file:') {
+      document.getElementById('view').innerHTML =
+        '<div class="empty"><b>Aplikace se musí spustit přes server.</b><br><br>' +
+        'Zavři tuto stránku a ve složce <code>skialp</code> dvakrát klikni na <b>start.bat</b>, ' +
+        'nebo otevři veřejnou verzi na GitHub Pages. ' +
+        'Prohlížeč se pak otevře sám na adrese http://127.0.0.1:8765/</div>';
+    }
+  </script>
+  <!--SKIALP_STATIC-->
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="vendor/qrcode/qrcode.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
