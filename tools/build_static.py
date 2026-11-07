@@ -181,6 +181,11 @@ def main():
 
     for name, (producer, reuse_s) in SOURCES.items():
         prev = prev_aval if name == "avalanche" else fetch_prev(args.prev_url, name)
+        if prev and prev.get("retryAfter", 0) > now:  # zdroj nedávno nešel – zkusí se později
+            write_json(out / "api" / f"{name}.json", prev)
+            status[name] = {"updated": prev.get("updated"), "reused": True}
+            log(f"{name}: převzato (zdroj nedostupný, další pokus po {time.strftime('%H:%M', time.localtime(prev['retryAfter']))})")
+            continue
         if prev and reuse_s and now - prev.get("updated", 0) < reuse_s:
             write_json(out / "api" / f"{name}.json", prev)
             status[name] = {"updated": prev["updated"], "reused": True}
@@ -200,6 +205,8 @@ def main():
                 # uložený snímek má staré datum, takže se příště zkusí Overpass znovu
                 prev = json.loads(server.ROUTES_FALLBACK.read_text(encoding="utf-8"))
             if prev:
+                if reuse_s:  # méně časté zdroje (trasy, mapa) při výpadku zkusit znovu až později
+                    prev = {**prev, "retryAfter": now + min(6 * 3600, reuse_s / 2)}
                 write_json(out / "api" / f"{name}.json", prev)
                 status[name].update(updated=prev.get("updated"), reused=True)
                 log(f"{name}: CHYBA ({e}) – použita předchozí data")

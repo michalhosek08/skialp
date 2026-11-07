@@ -415,7 +415,7 @@ def produce_routes():
     data = None
     for url in OVERPASS:
         try:
-            body, _ = http_get(url, timeout=90, data=urllib.parse.urlencode({"data": q}).encode())
+            body, _ = http_get(url, timeout=60, data=urllib.parse.urlencode({"data": q}).encode())
             data = json.loads(body.decode("utf-8"))
             break
         except Exception as e:  # noqa: BLE001
