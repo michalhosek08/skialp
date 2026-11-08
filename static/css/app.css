@@ -376,3 +376,78 @@ details summary { cursor: pointer; font-weight: 600; }
   body.side-open .demo-banner { display: none; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---------- plánování trasy ---------- */
+.tabs button { padding-left: 2px; padding-right: 2px; font-size: 13.5px; }
+.leaflet-container.planning { cursor: crosshair; }
+.plan-hint { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; }
+.plan-hint:not(.hidden) ~ #slope-hint { top: 58px; }
+.rp-icon { background: none; border: 0; }
+.rp {
+  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  color: #fff; font: 800 12.5px/1 system-ui, sans-serif; border: 2.5px solid #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, .4);
+  background: #e5195f; cursor: grab;
+}
+.rp-start { background: #1e9e4a; }
+.rp-end { background: #c62828; }
+.rt-head .check { margin: 4px 0 8px; }
+.rt-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 4px; }
+.rt-opts > div { display: flex; flex-direction: column; gap: 3px; }
+.seg.small { padding: 2px; }
+.seg.small button { padding: 3px 9px; font-size: 12px; }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.rt-list { list-style: none; margin: 0 0 6px; padding: 0; }
+.rt-list li { display: flex; align-items: center; gap: 9px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.rt-list .rp { width: 24px; height: 24px; font-size: 11.5px; cursor: default; box-shadow: none; border-width: 2px; }
+.rt-pt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.rt-modebtn { border: 1px solid var(--line-2); background: var(--chip); border-radius: 10px; padding: 1px 8px; font-size: 11.5px; cursor: pointer; }
+.rt-btns { display: flex; gap: 2px; }
+.rt-btns button { border: 0; background: transparent; width: 26px; height: 26px; border-radius: 6px; cursor: pointer; color: var(--muted); }
+.rt-btns button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.rt-btns button:disabled { opacity: .3; cursor: default; }
+.rt-metrics { margin-bottom: 10px; }
+.rt-time { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; margin-bottom: 8px; }
+.rt-time label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); }
+.rt-time input, .rt-time select, .rt-name {
+  font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line-2); border-radius: 7px; padding: 4px 6px;
+}
+.rt-name { width: 100%; margin-bottom: 6px; }
+.profile-wrap { position: relative; margin: 4px 0; }
+.rt-profile { width: 100%; height: auto; display: block; touch-action: pan-y; }
+.pf-area { fill: rgba(229, 25, 95, .14); }
+.pf-line { fill: none; stroke: #e5195f; stroke-width: 1.8; }
+.pf-grid { stroke: var(--line-2); stroke-width: .5; }
+.pf-lbl { font-size: 9px; fill: var(--muted); }
+.pf-wp { stroke: var(--muted); stroke-width: .8; stroke-dasharray: 2 2; }
+.pf-wpl { font-size: 9px; font-weight: 800; fill: var(--text); }
+.pf-cur { stroke: #ff9800; stroke-width: 1.5; }
+.pf-hit { fill: transparent; cursor: crosshair; }
+.profile-tip {
+  position: absolute; top: -4px; width: 150px; background: rgba(20, 50, 74, .94); color: #fff; font-size: 11.5px;
+  padding: 3px 7px; border-radius: 7px; pointer-events: none; text-align: center;
+}
+.band-bars { display: flex; flex-wrap: wrap; gap: 3px 12px; font-size: 12.5px; margin-bottom: 6px; }
+.band-bars i, .rt-runs i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.rt-runs { list-style: none; padding: 0; margin: 0 0 6px; font-size: 12.5px; }
+.rt-runs li { padding: 3px 0; cursor: pointer; }
+.rt-runs li:hover { color: var(--accent); }
+.rt-regs { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.rt-reg { display: flex; gap: 9px; align-items: center; }
+.lvl.small { width: 28px; height: 28px; font-size: 14px; border-radius: 6px; }
+.rt-sun { font-size: 12.5px; margin-bottom: 6px; }
+.rt-wx { font-size: 11.5px; }
+.rt-wx td, .rt-wx th { padding: 3px 3px; white-space: nowrap; }
+.rt-wx tr.top td { font-weight: 700; }
+.rt-wx small { font-size: 10px; }
+.warn { color: #c77700; }
+.pos { color: var(--pos); }
+.loading.small { padding: 14px 10px; font-size: 12.5px; }
+.loading.small .spinner { width: 20px; height: 20px; margin-bottom: 6px; }
+.rt-saved ul { list-style: none; padding: 0; margin: 4px 0 0; }
+.rt-saved li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.rt-saved li a { flex: 1; }
+.rt-saved button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.pp-row { margin: 6px 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mapy-attr img { vertical-align: -3px; }
+label.btn input[type=file] { display: none; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }

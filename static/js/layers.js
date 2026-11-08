@@ -69,7 +69,7 @@ export const SLOPE_CLASSES = [
 
 const demCache = new Map();
 
-function loadDem(z, x, y) {
+export function loadDem(z, x, y) {
   const key = `${z}/${x}/${y}`;
   if (demCache.has(key)) return demCache.get(key);
   const p = new Promise((resolve, reject) => {

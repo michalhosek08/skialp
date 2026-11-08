@@ -37,6 +37,22 @@ STATIC = ROOT / "static"
 DATA = STATIC / "data"
 CACHE = ROOT / "cache"
 UA = "SkialpApp/1.0 (personal ski touring dashboard)"
+MAPY_KEY_FILE = ROOT / "mapy_key.txt"  # klíč k API Mapy.com – jen lokálně, necommituje se
+
+
+def mapy_api_key():
+    """Klíč k API Mapy.com z proměnné prostředí MAPY_API_KEY nebo ze souboru mapy_key.txt."""
+    import os
+    key = os.environ.get("MAPY_API_KEY", "").strip()
+    if not key and MAPY_KEY_FILE.exists():
+        key = MAPY_KEY_FILE.read_text(encoding="utf-8").strip()
+    return key if re.fullmatch(r"[A-Za-z0-9_\-]{10,200}", key or "") else ""
+
+
+def config_js_with_key(text):
+    """Doplní klíč do static/js/config.js (v repozitáři je prázdný)."""
+    key = mapy_api_key()
+    return text.replace("export const MAPY_API_KEY = '';", f"export const MAPY_API_KEY = '{key}';") if key else text
 
 try:
     from zoneinfo import ZoneInfo
@@ -644,6 +660,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return None
+
+        if p == "/js/config.js":
+            text = config_js_with_key((STATIC / "js" / "config.js").read_text(encoding="utf-8"))
+            return self.send_bytes(text.encode("utf-8"), "application/javascript; charset=utf-8")
 
         # statické soubory
         if p in ("", "/"):

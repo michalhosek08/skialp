@@ -170,6 +170,11 @@ def main():
     index = out / "index.html"
     index.write_text(index.read_text(encoding="utf-8").replace(
         "<!--SKIALP_STATIC-->", "<script>window.SKIALP_STATIC = true;</script>"), encoding="utf-8")
+    # klíč k API Mapy.com z tajného úložiště GitHubu (proměnná MAPY_API_KEY) – v repozitáři není
+    cfg = out / "js" / "config.js"
+    cfg_text = cfg.read_text(encoding="utf-8")
+    cfg.write_text(server.config_js_with_key(cfg_text), encoding="utf-8")
+    log("Mapy.com: klíč " + ("doplněn" if server.mapy_api_key() else "není nastaven – trasy jen přes BRouter"))
 
     now = time.time()
     status = {}

@@ -10,6 +10,7 @@ import {
 } from './layers.js';
 import { forecastChart } from './chart.js';
 import { STATIC, dataUrl, metaUrl, regionsUrl, RADAR_URL, camThumbUrl, camFullUrls } from './api.js';
+import { createPlanner } from './planner.js';
 
 /* global L */
 
@@ -347,6 +348,7 @@ function buildAvalLayer() {
     pane: 'avalPane', bubblingMouseEvents: false,
     onEachFeature: (f, layer) => {
       layer.on('click', e => {
+        if (planner.isActive()) { planner.addPoint(e.latlng); return; }
         L.popup({ maxWidth: 320 }).setLatLng(e.latlng).setContent(avalPopup(f.properties.id)).openOn(map);
       });
     },
@@ -574,7 +576,10 @@ function renderRoutes() {
     pane: 'routePane', bubblingMouseEvents: false,
     style: f => ({ color: DIFF_COLOR[f.properties.difficulty] || '#8e24aa', weight: 3.5, opacity: 0.9, dashArray: '7 5' }),
     onEachFeature: (f, layer) => {
-      layer.bindPopup(routePopup(f.properties));
+      layer.on('click', e => {
+        if (planner.isActive()) { planner.addPoint(e.latlng); return; }
+        L.popup().setLatLng(e.latlng).setContent(routePopup(f.properties)).openOn(map);
+      });
       layer.on('mouseover', () => layer.setStyle({ weight: 6 }));
       layer.on('mouseout', () => layer.setStyle({ weight: 3.5 }));
     },
@@ -710,12 +715,16 @@ function onTimeChange(i) {
 const viewEl = document.getElementById('view');
 
 function setView(v) {
+  const was = S.view;
   S.view = v;
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
+  if (was === 'route' && v !== 'route') planner.onHide();
+  if (v === 'route') { viewEl.scrollTop = 0; planner.onShow(); return; }
   renderView();
 }
 
 function renderView() {
+  if (S.view === 'route') { planner.onDataUpdate(); return; }
   const scroll = viewEl.scrollTop;
   if (S.view === 'overview') viewEl.innerHTML = overviewHtml();
   else if (S.view === 'area') viewEl.innerHTML = areaHtml();
@@ -916,6 +925,7 @@ function areaHtml() {
     </section>
     <section class="note">ℹ ${esc(a.note || '')}</section>
     <section class="pp-links">
+      <button class="btn small" data-act="plan-from" data-id="${a.id}">🧭 Naplánovat trasu odsud</button>
       <a href="https://mapy.cz/turisticka?x=${a.lon}&y=${a.lat}&z=13" target="_blank" rel="noopener">Mapy.cz</a>
       <a href="https://www.windy.com/${a.lat}/${a.lon}?${a.lat},${a.lon},12" target="_blank" rel="noopener">Windy</a>
       <a href="https://www.yr.no/en/forecast/daily-table/${a.lat.toFixed(4)},${a.lon.toFixed(4)}" target="_blank" rel="noopener">yr.no</a>
@@ -1176,7 +1186,7 @@ function focusRoute(osm) {
   L_.routes.eachLayer(l => {
     if (l.feature.properties.osm === osm) {
       map.fitBounds(l.getBounds(), { maxZoom: 14, padding: [40, 40] });
-      l.openPopup(l.getBounds().getCenter());
+      L.popup().setLatLng(l.getBounds().getCenter()).setContent(routePopup(l.feature.properties)).openOn(map);
     }
   });
 }
@@ -1188,6 +1198,11 @@ document.addEventListener('click', async e => {
   if (['layer', 'base', 'meteo', 'notify'].includes(act)) return; // řeší 'change'
   switch (act) {
     case 'area': selectArea(t.dataset.id); break;
+    case 'plan-from': {
+      const a = S.areas.find(x => x.id === t.dataset.id);
+      if (a) { planner.startFrom(a.lat, a.lon); setView('route'); openSidebar(); }
+      break;
+    }
     case 'day': S.dayIdx = +t.dataset.i; renderAreaMarkers(); renderView(); break;
     case 'view': setView(t.dataset.v); break;
     case 'aval-day': S.avalDay = +t.dataset.i; styleAval(); renderView(); break;
@@ -1279,6 +1294,12 @@ document.getElementById('tb-play').addEventListener('click', e => {
   }, 700);
 });
 
+// plánování trasy
+const planner = createPlanner({
+  map, viewEl, isShown: () => S.view === 'route', featureContains, openModal, qrSvg,
+  aval: { bulletinFor, bulletinLevel, regionName, regions: () => S.regions, DANGER, PROBLEM_CS, NO_PROBLEM },
+});
+
 // hodnota pod kurzorem a bodová předpověď
 const hoverEl = document.getElementById('hover');
 map.on('mousemove', e => {
@@ -1291,6 +1312,7 @@ map.on('mousemove', e => {
 });
 map.on('mouseout', () => hoverEl.classList.add('hidden'));
 map.on('click', e => {
+  if (planner.isActive()) { planner.addPoint(e.latlng); return; }
   if (!S.meteo || !S.grid) return;
   const t = timeIdx(), k = S.grid.times[t];
   const rows = Object.entries(METEO_VARS).map(([key, c]) => {
@@ -1337,6 +1359,8 @@ async function init() {
 
   renderWebcams();
   applyLayers();
+  const routeFromLink = planner.loadFromHash();
+  if (routeFromLink) { setView('route'); openSidebar(); }
   document.body.classList.add('side-open');
   // Výřez na všechny oblasti. Na kartě otevřené na pozadí může mít mapa nulovou velikost –
   // pak se výřez nastaví až ve chvíli, kdy mapa skutečně dostane rozměry.
@@ -1347,8 +1371,11 @@ async function init() {
     if (size.x < 100 || size.y < 100) return;
     // na mobilu zakrývá spodek mapy panel – oblasti umístíme nad něj
     const sheet = window.innerWidth <= 760 ? document.getElementById('sidebar').offsetHeight : 0;
-    map.fitBounds(L.latLngBounds(S.areas.map(a => [a.lat, a.lon])),
-      { paddingTopLeft: [20, 20], paddingBottomRight: [20, 20 + sheet], maxZoom: 9 });
+    if (routeFromLink) planner.fit(); // otevřený odkaz na trasu – ukázat trasu, ne všechny oblasti
+    else {
+      map.fitBounds(L.latLngBounds(S.areas.map(a => [a.lat, a.lon])),
+        { paddingTopLeft: [20, 20], paddingBottomRight: [20, 20 + sheet], maxZoom: 9 });
+    }
     fitted = true;
   };
   // velikost mapy se mění s panelem (i během animace) – Leaflet o tom musí vědět

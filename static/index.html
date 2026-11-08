@@ -35,6 +35,7 @@
       <nav class="tabs">
         <button data-view="overview" class="active">Přehled</button>
         <button data-view="area">Oblast</button>
+        <button data-view="route">Trasa</button>
         <button data-view="aval">Laviny</button>
         <button data-view="cams">Kamery</button>
       </nav>
@@ -45,6 +46,8 @@
 
     <aside id="layers" class="layers-panel"></aside>
 
+    <div id="plan-hint" class="map-hint plan-hint hidden">Klikni do mapy a přidej bod trasy
+      <button class="btn small" data-act="rt-done">Hotovo</button></div>
     <div id="slope-hint" class="map-hint hidden">Sklon svahů se zobrazí po přiblížení mapy</div>
     <div id="hover" class="hover-read hidden"></div>
     <div id="legend" class="legend hidden"></div>

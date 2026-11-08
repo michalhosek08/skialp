@@ -79,6 +79,20 @@ předpověď regionu, webkamery a skialpové trasy v okolí.
 | Aktuální stav | webkamery (barva = výsledek rozboru), meteostanice (naměřeno), radar srážek, sněhová pokrývka z družice, družicový snímek |
 | Předpověď | teplota, srážky, nový sníh za 24 h, výška sněhu, nárazy větru – s časovou osou (−24 h až +72 h) a přehráváním; klik do mapy ukáže hodnoty v bodě |
 
+**Plánování trasy** (záložka *Trasa*)
+- klikáním do mapy přidáváš body (start, mezibody, cíl), body jde přetahovat, mazat a přeřazovat,
+  kliknutím na trasu vložíš bod mezi; trasu lze obrátit,
+- úseky **po cestách** (plánovač Mapy.com, při výpadku BRouter) nebo **přímo** – pro výstupy a sjezdy mimo cesty,
+- **výškový profil** propojený s mapou, délka, stoupání, klesání, nejvyšší bod a **odhad času** podle
+  skialpového tempa (výstup 300–600 m/h, sjezd, přepnutí pásů),
+- **lavinový terén na trase**: úseky přes svahy nad 30/35/40/45° (do ~40 m od trasy), barevně v profilu
+  i na mapě, lavinový stupeň regionu a délka trasy v kritických expozicích z lavinové předpovědi,
+- **počasí na trase v čase průchodu** (teplota, vítr, srážky, oblačnost, mlha, nulová izoterma)
+  a porovnání s východem a západem slunce,
+- sdílení odkazem (i s časem startu), uložení tras v prohlížeči, export a import **GPX**.
+  Export GPX počítá trasu přes BRouter – podmínky Mapy.com export výsledků nedovolují.
+- V detailu oblasti je tlačítko *Naplánovat trasu odsud*.
+
 **Rozbor webkamer** – každých 15 minut se stáhnou snímky ze 140 kamer a z obrazu
 se odhadne sníh v záběru, viditelnost (mlha / v oblacích) a modrá obloha.
 Za soumraku a v noci (podle výšky Slunce) se snímky nehodnotí.
@@ -102,6 +116,19 @@ aplikace hodnotila podmínky v daný den (archivní předpověď a lavinové zpr
 
 Data se ukládají do složky `cache/` – při výpadku zdroje se ukáže poslední známý stav.
 Stav jednotlivých zdrojů zobrazíš kliknutím na „Aktualizováno …“ v horní liště.
+
+## Klíč k Mapy.com (plánování tras)
+
+Plánovač Mapy.com potřebuje klíč z <https://developer.mapy.com/> (zdarma, 250 000 kreditů měsíčně,
+jedna trasa = 4 kredity). Bez klíče plánuje BRouter. Klíč **není v repozitáři**:
+
+- **Veřejná verze:** GitHub → repozitář → *Settings → Secrets and variables → Actions →
+  New repository secret*, název `MAPY_API_KEY`, hodnota = klíč. Projeví se při další aktualizaci.
+- **Lokální server:** soubor `mapy_key.txt` vedle `server.py` s klíčem na prvním řádku
+  (soubor je v `.gitignore`).
+- Klíč je ve stránce vidět, proto ho v administraci Mapy.com (*API klíče → Zabezpečení*) omez na HTTP
+  referery `michalhosek08.github.io`, `localhost:*` a `127.0.0.1:*`. Placené čerpání nezapínej –
+  po vyčerpání kreditů se plánování jen přepne na BRouter.
 
 ## Úpravy
 

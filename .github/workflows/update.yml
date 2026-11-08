@@ -39,6 +39,8 @@ jobs:
         uses: actions/configure-pages@v6
 
       - name: Stažení dat a sestavení stránky
+        env:
+          MAPY_API_KEY: ${{ secrets.MAPY_API_KEY }}   # klíč k plánování tras Mapy.com (volitelný)
         run: python tools/build_static.py --out _site --prev-url "${{ steps.pages.outputs.base_url }}/"
 
       - uses: actions/upload-pages-artifact@v5
