@@ -364,7 +364,10 @@ function selectArea(id, fly = true) {
       const sheet = document.getElementById('sidebar').offsetHeight;
       target = map.unproject(map.project(target, z).add([0, sheet / 2]), z);
     }
-    map.flyTo(target, z, { duration: 0.8 });
+    // mapa bez rozměrů (karta na pozadí) by při animaci spadla – tam jen nastavíme výřez
+    const size = map.getSize();
+    if (size.x < 100 || size.y < 100) map.setView(target, z, { animate: false });
+    else map.flyTo(target, z, { duration: 0.8 });
   }
 }
 
