@@ -143,7 +143,7 @@ export function buildGpx(name, track, waypoints) {
   const pt = (p, tag) => `<${tag} lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">` +
     `${p.ele != null && !Number.isNaN(p.ele) ? `<ele>${p.ele.toFixed(1)}</ele>` : ''}${p.name ? `<name>${xmlEsc(p.name)}</name>` : ''}</${tag}>`;
   return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Skialp CZ/SK" xmlns="http://www.topografix.com/GPX/1/1">
+<gpx version="1.1" creator="Skialp" xmlns="http://www.topografix.com/GPX/1/1">
 <metadata><name>${xmlEsc(name)}</name><time>${new Date().toISOString()}</time></metadata>
 ${waypoints.map(w => pt(w, 'wpt')).join('\n')}
 <trk><name>${xmlEsc(name)}</name><trkseg>

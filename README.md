@@ -1,6 +1,6 @@
-# Skialp CZ/SK
+# Skialp CZ/SK/AT
 
-Mapová aplikace pro skialpinisty v českých a slovenských horách. Sama stahuje
+Mapová aplikace pro skialpinisty v českých, slovenských a rakouských horách. Sama stahuje
 předpovědi, lavinové zprávy, měření stanic a snímky z webkamer, vyhodnocuje je
 a v přehledu ukazuje, kde jsou zrovna nejlepší podmínky.
 
@@ -62,11 +62,14 @@ je potřeba zaškrtnout i veřejné sítě, nebo síť ve Windows přepnout na �
 - žebříček oblastí pro dnes / zítra / pozítří se skóre 0–100 a důvody
   (sníh, nový sníh, srážky, vítr, oblačnost, mlha, obleva, lavinový stupeň,
   rozbor webkamer),
+- filtr podle země (vše / Česko / Slovensko / Rakousko) – platí pro žebříček, souhrn i upozornění,
 - volitelné upozornění v prohlížeči, když bude někde „Ideální“ (skóre ≥ 75).
 
-**Detail oblasti** – 28 skialpových oblastí (Krkonoše, Jizerky, Orlické hory,
-Králický Sněžník, Jeseníky, Beskydy, Šumava, Krušné hory, Vysoké, Západné
-a Nízke Tatry, Malá a Veľká Fatra, Choč, Babia hora): hodnocení na 3 dny, aktuální
+**Detail oblasti** – 66 skialpových oblastí: 16 v Česku (Krkonoše, Jizerky, Orlické hory,
+Králický Sněžník, Jeseníky, Beskydy, Šumava, Krušné hory), 12 na Slovensku (Vysoké, Západné
+a Nízke Tatry, Malá a Veľká Fatra, Choč, Babia hora) a 38 v Rakousku (od Schneebergu a Raxu přes
+Hochschwab, Nízké a Vysoké Taury, Dachstein, Kitzbühelské, Tuxské, Stubaiské a Ötztalské Alpy
+po Silvrettu, Arlberg a Vorarlbersko). U každé: hodnocení na 3 dny, aktuální
 stav, naměřené hodnoty nejbližší stanice, graf předpovědi na 4 dny, lavinová
 předpověď regionu, webkamery a skialpové trasy v okolí.
 
@@ -75,8 +78,8 @@ předpověď regionu, webkamery a skialpové trasy v okolí.
 |---|---|
 | Podklad | turistická (OpenTopoMap), OSM, topografická a letecká (Esri) |
 | Skialp | oblasti s hodnocením (popisek: skóre / teplota / sníh / nový sníh / vítr), skialpové trasy z OSM, sjezdovky a lanovky (OpenSnowMap), turistické trasy |
-| Laviny | lavinové regiony obarvené stupněm nebezpečí, **sklon svahů** (27–30°, 30–35°, 35–40°, 40–45°, > 45°) s filtrem expozic a nadmořské výšky; tlačítko „Ukázat kritické svahy“ nastaví filtr podle lavinové předpovědi |
-| Aktuální stav | webkamery (barva = výsledek rozboru), meteostanice (naměřeno), radar srážek, sněhová pokrývka z družice, družicový snímek |
+| Laviny | lavinové regiony (154 v ČR, SR a Rakousku) obarvené stupněm nebezpečí, **sklon svahů** (27–30°, 30–35°, 35–40°, 40–45°, > 45°) s filtrem expozic a nadmořské výšky; tlačítko „Ukázat kritické svahy“ nastaví filtr podle lavinové předpovědi |
+| Aktuální stav | webkamery (barva = výsledek rozboru; stejně jako trasy se kreslí až po přiblížení), meteostanice (naměřeno), radar srážek, sněhová pokrývka z družice, družicový snímek |
 | Předpověď | teplota, srážky, nový sníh za 24 h, výška sněhu, nárazy větru – s časovou osou (−24 h až +72 h) a přehráváním; klik do mapy ukáže hodnoty v bodě |
 
 **Plánování trasy** (záložka *Trasa*)
@@ -93,7 +96,11 @@ předpověď regionu, webkamery a skialpové trasy v okolí.
   Export GPX počítá trasu přes BRouter – podmínky Mapy.com export výsledků nedovolují.
 - V detailu oblasti je tlačítko *Naplánovat trasu odsud*.
 
-**Rozbor webkamer** – každých 15 minut se stáhnou snímky ze 140 kamer a z obrazu
+**Lavinové předpovědi** (záložka *Laviny*) – seskupené podle vydavatele: Česko, Slovensko a sedm
+rakouských spolkových zemí. U každé předpovědi stupeň (i rozepsaný podle výšky a denní doby),
+lavinové problémy s expozicemi, texty lavinové služby (rakouské jsou anglicky) a odkaz na originál.
+
+**Rozbor webkamer** – každých 15 minut se stáhnou snímky ze zhruba 350 kamer a z obrazu
 se odhadne sníh v záběru, viditelnost (mlha / v oblacích) a modrá obloha.
 Za soumraku a v noci (podle výšky Slunce) se snímky nehodnotí.
 
@@ -104,10 +111,10 @@ aplikace hodnotila podmínky v daný den (archivní předpověď a lavinové zpr
 
 | Data | Zdroj | Obnova |
 |---|---|---|
-| Předpověď pro oblasti | [Open-Meteo](https://open-meteo.com) (výška oblasti) | 30 min |
-| Meteo mapa (mřížka ~25 km) | Open-Meteo | 3 h |
-| Lavinové předpovědi | HS ČR, SLP HZS přes [EAWS](https://avalanches.org) (CAAML) | 20 min |
-| Měření stanic | [ČHMÚ](https://opendata.chmi.cz), [SHMÚ](https://opendata.shmu.sk) open data | 10 min |
+| Předpověď pro oblasti | [Open-Meteo](https://open-meteo.com) (výška oblasti) | 60 min |
+| Meteo mapa (mřížka ~30 km) | Open-Meteo | 3 h |
+| Lavinové předpovědi | HS ČR, SLP HZS a rakouské zemské lavinové služby (LWD) přes [EAWS](https://avalanches.org) (CAAML) | 20 min |
+| Měření stanic | [ČHMÚ](https://opendata.chmi.cz), [SHMÚ](https://opendata.shmu.sk), [GeoSphere Austria](https://data.hub.geosphere.at) (i měřená výška sněhu) | 10 min |
 | Radar | [RainViewer](https://www.rainviewer.com) | 5 min |
 | Skialpové trasy | OpenStreetMap / Overpass (`piste:type=skitour`) | 24 h |
 | Webkamery | [Ventusky](https://www.ventusky.com) (původní zdroj je uveden u kamery) | 15 min |
@@ -134,15 +141,23 @@ jedna trasa = 4 kredity). Bez klíče plánuje BRouter. Klíč **není v repozit
 
 - **Oblasti**: `static/data/areas.json` (název, souřadnice, výška pro předpověď, poznámka).
 - **Webkamery**: `python tools/build_webcams.py` znovu sestaví seznam kamer
-  v okolí oblastí (`static/data/webcams.json`) – spusť po přidání oblastí.
+  v okolí oblastí (`static/data/webcams.json`). Po přidání oblastí stačí
+  `python tools/build_webcams.py --missing` (jen oblasti bez kamer) nebo `--country AT`.
+- **Lavinové regiony**: `python tools/build_regions.py` stáhne aktuální hranice regionů
+  (lavinové služby je občas před sezónou mění).
+- **Záložní snímek tras**: `python tools/build_routes_fallback.py` (použije se, když
+  server OpenStreetMap neodpovídá).
 - **Hodnocení**: váhy a prahy jsou v `static/js/scoring.js`.
 
 ## Omezení
 
 - Výška sněhu je **modelový odhad** (Open-Meteo), ne měření; v úzkých dolinách
-  a na hřebenech může být realita jiná. Měřený sníh mají jen některé stanice SHMÚ.
-- Lavinové předpovědi vychází jen pro Krkonoše, Jeseníky a slovenská pohoří
-  (obvykle prosinec–duben). Pro ostatní oblasti hodnoť terén sám.
+  a na hřebenech může být realita jiná. Měřený sníh mají jen některé stanice SHMÚ
+  a GeoSphere Austria.
+- Lavinové předpovědi vychází pro Krkonoše, Jeseníky, slovenská pohoří a rakouské Alpy
+  (obvykle prosinec–duben/květen). Pro ostatní oblasti hodnoť terén sám.
+- Rakouské oblasti jsou výběr známých skialpových míst, ne úplný seznam; texty rakouských
+  lavinových předpovědí jsou anglicky.
 - Rozbor webkamer je heuristický (barvy a kontrast obrazu) – ber ho jako orientační.
 - Aplikace nenahrazuje vlastní úsudek, oficiální lavinovou předpověď ani pravidla
   národních parků (KRNAP, TANAP, NAPANT…).

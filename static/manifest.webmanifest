@@ -1,7 +1,7 @@
 {
-  "name": "Skialp CZ/SK",
+  "name": "Skialp CZ/SK/AT",
   "short_name": "Skialp",
-  "description": "Podmínky pro skialpy v českých a slovenských horách – předpověď, sníh, laviny, webkamery a trasy.",
+  "description": "Podmínky pro skialpy v českých, slovenských a rakouských horách – předpověď, sníh, laviny, webkamery a trasy.",
   "lang": "cs",
   "start_url": "./",
   "scope": "./",

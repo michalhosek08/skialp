@@ -1,4 +1,4 @@
-// Skialp CZ/SK – hlavní logika aplikace.
+// Skialp CZ/SK/AT – hlavní logika aplikace.
 import {
   nowHourKey, addDays, dayLabel, shortDate, fmtTime, fmtDateTime, ago, num, plural, distKm,
   featureContains, featureDistanceKm, getJSON, esc, store, ASPECTS, ASPECT_CS, windDirCs, colorScale,
@@ -23,6 +23,14 @@ const PROBLEM_CS = {
 PROBLEM_CS.no_distanc_avalanche_problem = PROBLEM_CS.no_distinct_avalanche_problem; // překlep v datech HS ČR
 const NO_PROBLEM = new Set(['no_distinct_avalanche_problem', 'no_distanc_avalanche_problem', 'favourable_situation']);
 const PERIOD_CS = { earlier: 'dopoledne', later: 'odpoledne', all_day: 'celý den' };
+const COUNTRY = { CZ: 'Česko', SK: 'Slovensko', AT: 'Rakousko' };
+// skupina lavinových regionů = jeden vydavatel předpovědí (stát, v Rakousku spolková země)
+const AVAL_GROUP = {
+  CZ: 'Česko', SK: 'Slovensko', 'AT-02': 'Korutany', 'AT-03': 'Dolní Rakousy', 'AT-04': 'Horní Rakousy',
+  'AT-05': 'Salcbursko', 'AT-06': 'Štýrsko', 'AT-07': 'Tyrolsko', 'AT-08': 'Vorarlbersko',
+};
+// trasy a webkamery se kreslí až po přiblížení – z dálky by jen zakrývaly mapu a zpomalovaly ji
+const LAYER_MIN_ZOOM = { routes: 9, webcams: 8 };
 const DIFF_CS = {
   novice: 'velmi lehká', easy: 'lehká', intermediate: 'středně těžká', advanced: 'těžká',
   expert: 'velmi těžká', freeride: 'freeride', extreme: 'extrémní',
@@ -57,7 +65,7 @@ const DEFAULT_LAYERS = {
 const REFRESH_MIN = { forecast: 10, avalanche: 10, stations: 10, radar: 5, grid: 30, routes: 360 };
 const SOURCE_NAMES = {
   forecast: 'Předpověď pro oblasti (Open-Meteo)', grid: 'Meteo mapa (Open-Meteo)',
-  avalanche: 'Lavinové předpovědi (HS ČR, HZS SR / EAWS)', stations: 'Měření stanic (ČHMÚ, SHMÚ)',
+  avalanche: 'Lavinové předpovědi (HS ČR, HZS SR, rakouské LWD / EAWS)', stations: 'Měření stanic (ČHMÚ, SHMÚ, GeoSphere)',
   radar: 'Radar srážek (RainViewer)', routes: 'Skialpové trasy (OpenStreetMap)', cams: 'Rozbor webkamer',
 };
 
@@ -88,7 +96,10 @@ const S = {
   satDate: yesterday(),
   timeKey: null,
   notify: store.get('notify', false),
+  country: store.get('country', ''),   // filtr přehledu: '' = všechny země
+  avalClosed: new Set(),               // sbalené skupiny v záložce Laviny
 };
+if (S.country && !COUNTRY[S.country]) S.country = '';
 if (!BASE_LAYERS[S.base]) S.base = 'topo';
 if (S.meteo && !METEO_VARS[S.meteo]) S.meteo = '';
 
@@ -97,7 +108,7 @@ if (S.meteo && !METEO_VARS[S.meteo]) S.meteo = '';
 // ============================================================================
 
 const map = L.map('map', {
-  zoomControl: false, minZoom: 6, maxZoom: 18, zoomSnap: 0.5, zoomDelta: 0.5,
+  zoomControl: false, minZoom: 5, maxZoom: 18, zoomSnap: 0.5, zoomDelta: 0.5, // od 5: ČR, SR i Rakousko na šířku telefonu
   scrollWheelZoom: false, // kolečko obsluhujeme sami – viz níže
 }).setView([49.35, 17.4], 7);
 
@@ -163,6 +174,7 @@ const L_ = {
 function zoomClass() {
   const z = map.getZoom();
   map.getContainer().classList.toggle('z-names', z >= 9);
+  map.getContainer().classList.toggle('z-far', z < 7.5);
 }
 map.on('zoomend', zoomClass);
 zoomClass();
@@ -198,7 +210,7 @@ const HANDLERS = {
   async forecast(force) { const d = await loadSource('forecast', force); if (d) { S.forecast = d; compute(); } },
   async avalanche(force) {
     const d = await loadSource('avalanche', force);
-    if (d) { S.aval = d; compute(); styleAval(); }
+    if (d) { S.aval = d; buildAvalIndex(); compute(); styleAval(); }
   },
   async stations(force) { const d = await loadSource('stations', force); if (d) { S.stations = d; renderStations(); if (S.view === 'area') renderView(); } },
   async radar(force) { const d = await loadSource('radar', force); if (d) { S.radar = d; updateRadar(); } },
@@ -230,14 +242,42 @@ function tick() {
 // Výpočet hodnocení
 // ============================================================================
 
-function bulletinFor(regionId, dayStr) {
-  const d = S.aval?.days?.[dayStr];
-  if (!d) return null;
-  const list = d.bulletins.filter(b => (b.regions || []).some(r => r.regionID === regionId));
-  list.sort((a, b) => (b.publicationTime || '').localeCompare(a.publicationTime || ''));
-  return list[0] || null;
-}
 const bulletinLevel = b => Math.max(0, ...(b.dangerRatings || []).map(r => LEVEL[r.mainValue] ?? 0));
+
+/** Pro každý den: region → nejnovější předpověď, která ho uvádí. */
+function buildAvalIndex() {
+  S.avalIndex = {};
+  for (const [day, d] of Object.entries(S.aval?.days || {})) {
+    const exact = new Map();
+    for (const b of d.bulletins || []) {
+      for (const r of b.regions || []) {
+        const cur = exact.get(r.regionID);
+        if (!cur || (b.publicationTime || '') > (cur.publicationTime || '')) exact.set(r.regionID, b);
+      }
+    }
+    S.avalIndex[day] = { exact, resolved: new Map() };
+  }
+}
+
+function bulletinFor(regionId, dayStr) {
+  const ix = S.avalIndex?.[dayStr];
+  if (!ix || !regionId) return null;
+  if (ix.resolved.has(regionId)) return ix.resolved.get(regionId);
+  let b = ix.exact.get(regionId) || null;
+  // Lavinové služby regiony občas dělí nebo slučují – zkusíme nadřazený region (AT-06-10-02 → AT-06-10) …
+  for (let id = regionId; !b && id.lastIndexOf('-') > 4;) {
+    id = id.slice(0, id.lastIndexOf('-'));
+    b = ix.exact.get(id) || null;
+  }
+  // … a když ani ten není, podřízené regiony (bereme nejvyšší stupeň).
+  if (!b) {
+    for (const [id, cand] of ix.exact) {
+      if (id.startsWith(regionId + '-') && (!b || bulletinLevel(cand) > bulletinLevel(b))) b = cand;
+    }
+  }
+  ix.resolved.set(regionId, b);
+  return b;
+}
 function levelFor(regionId, dayIdx) {
   const b = regionId && bulletinFor(regionId, addDays(S.today, dayIdx));
   return b ? bulletinLevel(b) : null;
@@ -365,7 +405,7 @@ function avalPopup(id) {
   } else {
     const lvl = bulletinLevel(b);
     html += `<div class="danger-big" style="--c:${DANGER[lvl].color}"><b>${lvl}</b> ${DANGER[lvl].name} lavinové nebezpečí</div>`;
-    html += problemsHtml(b, true);
+    html += ratingsHtml(b) + problemsHtml(b, true);
   }
   html += `<button class="btn small" data-act="aval-detail" data-id="${id}">Celá předpověď</button></div>`;
   return html;
@@ -386,10 +426,27 @@ function aspectRose(aspects, size = 46) {
 
 function elevText(e) {
   if (!e) return 'všechny výšky';
-  const t = v => v === 'treeline' ? 'hranice lesa' : `${v} m`;
+  const t = (v, afterPrep) => v === 'treeline' ? (afterPrep ? 'hranicí lesa' : 'hranice lesa') : `${v} m`;
   if (e.lowerBound && e.upperBound) return `${t(e.lowerBound)} – ${t(e.upperBound)}`;
-  if (e.lowerBound) return `nad ${t(e.lowerBound)}`;
-  return `pod ${t(e.upperBound)}`;
+  if (e.lowerBound) return `nad ${t(e.lowerBound, true)}`;
+  return `pod ${t(e.upperBound, true)}`;
+}
+
+/** Stupně nebezpečí rozepsané podle výšky a denní doby (když se liší). */
+function ratingsHtml(b) {
+  const seen = new Set();
+  const parts = (b.dangerRatings || []).map(r => {
+    const when = r.validTimePeriod && r.validTimePeriod !== 'all_day' ? PERIOD_CS[r.validTimePeriod] : '';
+    const where = r.elevation ? elevText(r.elevation) : '';
+    return `${[when, where].filter(Boolean).join(', ') || 'jinde'}: <b>${LEVEL[r.mainValue] ?? '–'}</b>`;
+  }).filter(t => !seen.has(t) && seen.add(t));
+  return parts.length > 1 ? `<div class="muted ratings">${parts.join(' · ')}</div>` : '';
+}
+
+/** Text lavinové služby: jen prostý text, konce řádků zachovat. */
+function bulletinText(...parts) {
+  const raw = parts.filter(Boolean).join('\n\n').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
+  return esc(raw.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()).replace(/\n/g, '<br>');
 }
 
 function problemsHtml(b, compact = false) {
@@ -409,8 +466,9 @@ function problemsHtml(b, compact = false) {
 }
 
 /** Nastaví filtr sklonu podle lavinových problémů a zapne vrstvu. */
-function slopeFromBulletin(id) {
-  const b = bulletinFor(id, addDays(S.today, S.avalDay));
+function slopeFromBulletin(id, wholeBulletin = false, areaId = null) {
+  const dayStr = addDays(S.today, S.avalDay);
+  const b = bulletinFor(id, dayStr);
   if (!b) return;
   const asp = new Set(), lows = [], highs = [];
   for (const p of (b.avalancheProblems || []).filter(x => !NO_PROBLEM.has(x.problemType))) {
@@ -423,9 +481,24 @@ function slopeFromBulletin(id) {
   const maxElev = highs.length && highs.every(v => v != null) ? Math.max(...highs) : null;
   setSlopeFilter({ aspects: ASPECTS.map(a => asp.size ? asp.has(a) : true), minElev, maxElev });
   setLayer('slope', true);
-  const f = S.regions.features.find(x => x.properties.id === id);
-  if (f) map.fitBounds(L.geoJSON(f).getBounds(), { maxZoom: 12 });
-  if (map.getZoom() < 11) map.setZoom(11);
+  // Sklon svahů se kreslí až od přiblížení 11, celý region by se na mapu nevešel. Kam tedy mapu posunout:
+  // k oblasti, ze které se uživatel ptá; jinak zůstat, kde je, pokud se už dívá do regionu s touto
+  // předpovědí; jinak na střed regionu.
+  const area = areaId && S.areas.find(a => a.id === areaId);
+  const feats = S.regions.features.filter(x => x.properties.id === id ||
+    (wholeBulletin && bulletinFor(x.properties.id, dayStr) === b));
+  const c = map.getCenter();
+  if (area) {
+    map.setView([area.lat, area.lon], Math.max(map.getZoom(), 12));
+  } else if (feats.some(f => featureContains(f, c.lng, c.lat))) {
+    if (map.getZoom() < 11) map.setZoom(11);
+  } else {
+    const f = feats.find(x => x.properties.id === id) || feats[0];
+    if (f) {
+      const bounds = L.geoJSON(f).getBounds();
+      map.setView(bounds.getCenter(), Math.max(11, Math.min(12, map.getBoundsZoom(bounds))));
+    }
+  }
 }
 
 const slopeFilter = store.get('slopeFilter', { aspects: ASPECTS.map(() => true), minElev: null, maxElev: null });
@@ -584,7 +657,7 @@ function renderRoutes() {
       layer.on('mouseout', () => layer.setStyle({ weight: 3.5 }));
     },
   });
-  if (was || S.layers.routes) L_.routes.addTo(map);
+  if ((was || S.layers.routes) && layerVisible('routes')) L_.routes.addTo(map);
 }
 
 function updateRadar() {
@@ -624,25 +697,30 @@ function layerObj(id) {
   }
 }
 
+const ZOOM_GATED = Object.keys(LAYER_MIN_ZOOM);
+const layerVisible = id => S.layers[id] && map.getZoom() >= (LAYER_MIN_ZOOM[id] || 0);
+
+function syncLayer(id) {
+  const l = layerObj(id);
+  if (!l) return;
+  const on = layerVisible(id);
+  if (on && !map.hasLayer(l)) l.addTo(map);
+  if (!on && map.hasLayer(l)) map.removeLayer(l);
+}
+
 function setLayer(id, on) {
   S.layers[id] = on;
   store.set('layers', S.layers);
-  const l = layerObj(id);
-  if (l) {
-    if (on && !map.hasLayer(l)) l.addTo(map);
-    if (!on && map.hasLayer(l)) map.removeLayer(l);
-  }
+  syncLayer(id);
   if (id === 'slope') updateSlopeHint();
   renderLayersPanel();
 }
 
 function applyLayers() {
-  for (const id of Object.keys(DEFAULT_LAYERS)) {
-    const l = layerObj(id);
-    if (l && S.layers[id] && !map.hasLayer(l)) l.addTo(map);
-  }
+  for (const id of Object.keys(DEFAULT_LAYERS)) syncLayer(id);
   updateSlopeHint();
 }
+map.on('zoomend', () => ZOOM_GATED.forEach(id => syncLayer(id)));
 
 function updateSlopeHint() {
   const hint = document.getElementById('slope-hint');
@@ -713,6 +791,17 @@ function onTimeChange(i) {
 // ============================================================================
 
 const viewEl = document.getElementById('view');
+// sbalené skupiny lavinových předpovědí si pamatujeme i po překreslení panelu
+viewEl.addEventListener('toggle', e => {
+  const el = e.target;
+  if (!el.classList?.contains('av-group')) return;
+  if (el.open) S.avalClosed.delete(el.dataset.g); else S.avalClosed.add(el.dataset.g);
+}, true);
+
+/** Posune panel na daný prvek. Okamžitě – plynulý posun by přerušilo překreslení panelu po obnově dat. */
+function scrollViewTo(el, offset = 0) {
+  if (el) viewEl.scrollTop += el.getBoundingClientRect().top - viewEl.getBoundingClientRect().top - offset;
+}
 
 function setView(v) {
   const was = S.view;
@@ -742,9 +831,16 @@ function dayTabs(cur, act, count = 3) {
     `<button data-act="${act}" data-i="${i}" class="${i === cur ? 'on' : ''}">${dayLabel(addDays(S.today, i), S.today)}</button>`).join('')}</div>`;
 }
 
+function countryChips() {
+  return `<div class="seg country">${[['', 'Vše'], ...Object.entries(COUNTRY)].map(([c, label]) =>
+    `<button data-act="country" data-c="${c}" class="${S.country === c ? 'on' : ''}">${label}</button>`).join('')}</div>`;
+}
+const inCountry = r => !S.country || r.area.country === S.country;
+
 function avalInfo(dayIdx) {
   const levels = {}, names = {};
   for (const f of S.regions?.features || []) {
+    if (S.country && f.properties.country !== S.country) continue;
     names[f.properties.id] = f.properties.name;
     const l = levelFor(f.properties.id, dayIdx) ?? levelFor(f.properties.id, 0);
     if (l) levels[f.properties.id] = l;
@@ -756,7 +852,8 @@ function overviewHtml() {
   if (!S.results.length) {
     return `<div class="loading"><div class="spinner"></div>Načítám předpověď a hodnotím podmínky…</div>`;
   }
-  const ov = buildOverview(S.results, S.dayIdx, avalInfo(S.dayIdx), S.today);
+  const list = S.results.filter(inCountry);
+  const ov = buildOverview(list, S.dayIdx, avalInfo(S.dayIdx), S.today);
   const top = ov.ranked.slice(0, 8);
   const rank = top.map((r, k) => {
     const d = r.days[S.dayIdx];
@@ -770,7 +867,7 @@ function overviewHtml() {
       </div></li>`;
   }).join('');
 
-  const rows = [...S.results].sort((a, b) => b.days[S.dayIdx].sc.score - a.days[S.dayIdx].sc.score).map(r => `
+  const rows = [...list].sort((a, b) => b.days[S.dayIdx].sc.score - a.days[S.dayIdx].sc.score).map(r => `
     <tr data-act="area" data-id="${r.area.id}">
       <td><b>${esc(r.area.name)}</b><br><small>${esc(r.area.range)}</small></td>
       ${[0, 1, 2].map(i => `<td><span class="sc" style="--c:${r.days[i]?.sc.cat.color}">${r.days[i]?.sc.score ?? '–'}</span></td>`).join('')}
@@ -784,7 +881,7 @@ function overviewHtml() {
     <section class="ov-hero season-${ov.season}">
       <div class="ov-kicker">Rychlý přehled · ${DEMO ? `${new Date(DEMO + 'T12:00Z').toLocaleDateString('cs-CZ')} (historie)` : fmtDateTime(Date.now())}</div>
       <h2>${esc(ov.headline)}</h2>
-      ${dayTabs(S.dayIdx, 'day')}
+      <div class="ov-ctl">${dayTabs(S.dayIdx, 'day')}${countryChips()}</div>
       <div class="ov-lines">${ov.lines.map(l => `<p>${l}</p>`).join('')}</div>
     </section>
     <section>
@@ -793,7 +890,7 @@ function overviewHtml() {
       <div class="cat-legend">${legend.map((l, i) => `<span><i style="background:${colors[i]}"></i>${l}</span>`).join('')}</div>
     </section>
     <section>
-      <details class="all-areas"><summary>Všechny oblasti (${S.results.length})</summary>
+      <details class="all-areas"><summary>Všechny oblasti${S.country ? ` – ${COUNTRY[S.country]}` : ''} (${list.length})</summary>
         <table class="tbl">
           <thead><tr><th>Oblast</th><th>${dayLabel(S.today, S.today)}</th><th>${dayLabel(addDays(S.today, 1), S.today)}</th><th>${dayLabel(addDays(S.today, 2), S.today)}</th>
           <th title="Výška sněhu (model), cm">Sníh</th><th title="Nový sníh za 3 dny, cm">Nový</th><th title="Sněžení v příštích 72 h, cm">+72 h</th></tr></thead>
@@ -808,7 +905,8 @@ function overviewHtml() {
       Hodnocení je orientační – kombinuje modelovou předpověď (výška sněhu je modelový odhad),
       lavinové předpovědi a rozbor webkamer. Před túrou si vždy přečti oficiální lavinovou předpověď
       (<a href="https://www.horskasluzba.cz/cz/pocasi-na-horach/lavinova-predpoved" target="_blank" rel="noopener">HS ČR</a>,
-      <a href="https://www.laviny.sk/" target="_blank" rel="noopener">SLP HZS</a>) a pravidla národních parků.
+      <a href="https://www.laviny.sk/" target="_blank" rel="noopener">SLP HZS</a>,
+      <a href="https://www.lawinen.at/" target="_blank" rel="noopener">lawinen.at</a>) a pravidla národních parků.
     </section>`;
 }
 
@@ -881,7 +979,7 @@ function areaHtml() {
     <section class="ar-head">
       <button class="back" data-act="view" data-v="overview">← Přehled</button>
       <h2>${esc(a.name)}</h2>
-      <div class="muted">${esc(a.range)} · ${a.country === 'CZ' ? 'Česko' : 'Slovensko'} · hodnoceno pro ~${a.elev} m n. m.</div>
+      <div class="muted">${esc(a.range)} · ${COUNTRY[a.country] || a.country} · hodnoceno pro ~${a.elev} m n. m.</div>
     </section>
     <section><div class="days3">${days}</div>
       <div class="chips big">${d.sc.reasons.map(chip).join('')}</div></section>
@@ -906,9 +1004,9 @@ function areaHtml() {
     <section>
       <h3>Laviny ${r.regionId ? `<small>· ${esc(regionName(r.regionId))}</small>` : ''}</h3>
       ${!r.regionId ? '<p class="muted">Pro tuto oblast se lavinová předpověď nevydává – hodnoť terén sám (sklon svahů najdeš ve vrstvách mapy).</p>'
-    : b ? `<div class="danger-big" style="--c:${DANGER[bulletinLevel(b)].color}"><b>${bulletinLevel(b)}</b> ${DANGER[bulletinLevel(b)].name}</div>${problemsHtml(b)}
+    : b ? `<div class="danger-big" style="--c:${DANGER[bulletinLevel(b)].color}"><b>${bulletinLevel(b)}</b> ${DANGER[bulletinLevel(b)].name}</div>${ratingsHtml(b)}${problemsHtml(b)}
         <button class="btn small" data-act="aval-detail" data-id="${r.regionId}">Celá předpověď</button>
-        <button class="btn small ghost" data-act="slope-from" data-id="${r.regionId}">Ukázat kritické svahy</button>`
+        <button class="btn small ghost" data-act="slope-from" data-id="${r.regionId}" data-area="${a.id}">Ukázat kritické svahy</button>`
       : '<p class="muted">Lavinová předpověď zatím nevyšla.</p>'}
     </section>
     <section>
@@ -945,35 +1043,63 @@ function avalHtml() {
   const tomorrowHas = (S.aval.days[addDays(S.today, 1)]?.bulletins || []).length > 0;
   const feats = S.regions?.features || [];
   const any = feats.some(f => bulletinFor(f.properties.id, dayStr));
+  // regiony po skupinách (stát / spolková země) a v nich podle předpovědi
+  const groups = new Map();
+  for (const f of feats) {
+    const gid = f.properties.group || f.properties.country;
+    if (!groups.has(gid)) groups.set(gid, { cards: new Map(), none: [] });
+    const g = groups.get(gid), b = bulletinFor(f.properties.id, dayStr);
+    if (!b) g.none.push(f);
+    else (g.cards.get(b) || g.cards.set(b, []).get(b)).push(f);
+  }
+  for (const g of groups.values()) g.max = Math.max(0, ...[...g.cards.keys()].map(bulletinLevel));
+  const groupName = gid => (gid.startsWith('AT') ? 'Rakousko – ' : '') + (AVAL_GROUP[gid] || gid);
   let html = `<section><h2>Lavinové předpovědi</h2>
     ${tomorrowHas ? dayTabs(S.avalDay, 'aval-day', 2) : ''}
-    <p class="muted">Zdroj: Horská služba ČR (Krkonoše, Jeseníky) a Stredisko lavínovej prevencie HZS (Slovensko) přes EAWS. Aktualizace každých 20 minut.</p></section>`;
+    <div class="av-jump">${[...groups].map(([gid, g]) =>
+    `<button data-act="aval-jump" data-g="${gid}"><i style="--c:${DANGER[g.max].color}">${g.max || '–'}</i>${AVAL_GROUP[gid] || gid}</button>`).join('')}</div>
+    <p class="muted">Zdroj: Horská služba ČR, Stredisko lavínovej prevencie HZS a lavinové služby rakouských spolkových zemí
+    (přes EAWS). Rakouské texty jsou anglicky. Aktualizace každých 20 minut.</p></section>`;
   if (!any) {
     html += `<section class="ov-hero season-off"><p><b>Pro ${dayLabel(dayStr, S.today).toLowerCase()} není vydaná žádná lavinová předpověď.</b>
       Předpovědi vychází obvykle od prosince do dubna${S.aval.lastPublished ? `; naposledy vyšla ${new Date(S.aval.lastPublished).toLocaleDateString('cs-CZ')}` : ''}.</p>
       <p>I mimo sezónu může na horách napadnout sníh a laviny hrozí – sleduj vrstvu <b>Sklon svahů</b> a čerstvý sníh.</p></section>`;
   }
-  for (const f of feats) {
-    const id = f.properties.id, b = bulletinFor(id, dayStr);
-    const lvl = b ? bulletinLevel(b) : 0;
-    const texts = b ? [
-      ['Lavinová aktivita', b.avalancheActivity?.comment],
-      ['Sněhová pokrývka', b.snowpackStructure?.comment],
-      ['Počasí', b.weatherForecast?.comment],
-      ['Tendence', [].concat(b.tendency || []).map(t => t?.comment).filter(Boolean).join(' ')],
-    ].filter(x => x[1]) : [];
-    const ratings = b ? (b.dangerRatings || []).map(r => `${PERIOD_CS[r.validTimePeriod] || ''}: ${LEVEL[r.mainValue] ?? '–'}`).join(' · ') : '';
-    html += `<section class="av-card" id="av-${id}">
+  const names = fs => fs.map(f => esc(f.properties.name));
+  const card = (b, fs) => {
+    const lvl = bulletinLevel(b);
+    const many = fs.length > 4;
+    const texts = [
+      ['Lavinová aktivita', bulletinText(b.avalancheActivity?.highlights, b.avalancheActivity?.comment)],
+      ['Sněhová pokrývka', bulletinText(b.snowpackStructure?.highlights, b.snowpackStructure?.comment)],
+      ['Počasí', bulletinText(b.weatherForecast?.highlights, b.weatherForecast?.comment)],
+      ['Tendence', bulletinText(...[].concat(b.tendency || []).flatMap(t => [t?.highlights, t?.comment]))],
+    ].filter(x => x[1]);
+    return `<div class="av-card">
+      ${fs.map(f => `<span class="anchor" id="av-${f.properties.id}"></span>`).join('')}
       <div class="av-head"><span class="lvl" style="--c:${DANGER[lvl].color}">${lvl || '–'}</span>
-        <div><b>${esc(f.properties.name)}</b><div class="muted">${f.properties.country === 'CZ' ? 'Česko' : 'Slovensko'}${b ? ` · ${DANGER[lvl].name}` : ' · bez předpovědi'}</div></div>
+        <div><b>${many ? `${names(fs.slice(0, 3)).join(', ')} a ${fs.length - 3} ${plural(fs.length - 3, 'další', 'další', 'dalších')}` : names(fs).join(', ')}</b>
+        <div class="muted">${DANGER[lvl].name} lavinové nebezpečí</div></div>
       </div>
-      ${b ? `${(b.dangerRatings || []).length > 1 ? `<div class="muted">${ratings}</div>` : ''}
-        ${problemsHtml(b)}
-        ${texts.map(([t, v]) => `<details><summary>${t}</summary><p>${esc(v).replace(/\n/g, '<br>')}</p></details>`).join('')}
-        <div class="muted small">Platí ${fmtDateTime(b.validTime?.startTime)} – ${fmtDateTime(b.validTime?.endTime)} · vydal ${esc(b.source?.provider?.name || '')}</div>
-        <div class="row"><button class="btn small" data-act="slope-from" data-id="${id}">Ukázat kritické svahy</button>
-        ${b.source?.provider?.website ? `<a class="btn small ghost" href="${esc(b.source.provider.website)}" target="_blank" rel="noopener">Originál</a>` : ''}</div>` : ''}
-    </section>`;
+      ${many ? `<details class="av-regions"><summary>Všech ${fs.length} regionů</summary><p>${names(fs).join(', ')}</p></details>` : ''}
+      ${ratingsHtml(b)}
+      ${problemsHtml(b)}
+      ${texts.map(([t, v]) => `<details><summary>${t}</summary><p${b.lang && b.lang !== 'cs' ? ` lang="${esc(b.lang)}"` : ''}>${v}</p></details>`).join('')}
+      <div class="muted small">Platí ${fmtDateTime(b.validTime?.startTime)} – ${fmtDateTime(b.validTime?.endTime)} · vydal ${esc(b.source?.provider?.name || '')}</div>
+      <div class="row"><button class="btn small" data-act="slope-from" data-all="1" data-id="${fs[0].properties.id}">Ukázat kritické svahy</button>
+      ${b.source?.provider?.website ? `<a class="btn small ghost" href="${esc(b.source.provider.website)}" target="_blank" rel="noopener">Originál</a>` : ''}</div>
+    </div>`;
+  };
+  for (const [gid, g] of groups) {
+    const cards = [...g.cards].sort((x, y) => bulletinLevel(y[0]) - bulletinLevel(x[0]));
+    html += `<details class="av-group" data-g="${gid}" id="avg-${gid}" ${S.avalClosed.has(gid) ? '' : 'open'}>
+      <summary><span class="lvl small" style="--c:${DANGER[g.max].color}">${g.max || '–'}</span>
+        <b>${groupName(gid)}</b> <span class="muted">${cards.length
+    ? `${cards.length} ${plural(cards.length, 'předpověď', 'předpovědi', 'předpovědí')}` : 'bez předpovědi'}</span></summary>
+      ${cards.map(([b, fs]) => card(b, fs)).join('')}
+      ${g.none.length ? `<p class="muted small av-none">${g.none.map(f => `<span class="anchor" id="av-${f.properties.id}"></span>`).join('')}
+        ${cards.length ? 'Bez předpovědi: ' : 'Regiony: '}${names(g.none).join(', ')}</p>` : ''}
+    </details>`;
   }
   return html;
 }
@@ -982,9 +1108,10 @@ function camsHtml() {
   if (!S.webcams.length) return '<div class="empty">Seznam webkamer je prázdný (spusť tools/build_webcams.py).</div>';
   const groups = {};
   for (const c of S.webcams) (groups[c.area] ||= []).push(c);
-  const order = S.areas.filter(a => groups[a.id]);
+  const order = S.areas.filter(a => groups[a.id] && (!S.country || a.country === S.country));
   const done = Object.keys(S.cam).length;
   return `<section><h2>Webkamery</h2>
+    ${countryChips()}
     <p class="muted">${S.webcams.length} kamer · vyhodnoceno ${done}${S.updated.cams ? ` · ${fmtTime(S.updated.cams)}` : ''}.
     Rozbor snímku odhaduje sníh, viditelnost (mlha) a modrou oblohu – je orientační.
     ${STATIC ? 'Snímky se vyhodnocují automaticky každých ~30 minut.' : ''}</p>
@@ -1014,6 +1141,9 @@ function renderLayersPanel() {
         <label>do <input type="number" step="100" data-act="elev-max" value="${slopeFilter.maxElev ?? ''}" placeholder="–"></label>
         <button class="btn small ghost" data-act="slope-reset">Vše</button></div>
         <div class="muted small">Zobrazuje se od přiblížení 11. Kliknutím na expozice vyfiltruješ svahy, nebo v lavinové předpovědi zvol „Ukázat kritické svahy".</div></div>`;
+    }
+    if (S.layers[id] && map.getZoom() < (LAYER_MIN_ZOOM[id] || 0)) {
+      return '<div class="muted small">Zobrazí se po přiblížení mapy.</div>';
     }
     if (id === 'radar' && S.layers.radar && S.radarTime) return `<div class="muted small">Snímek ${fmtTime(S.radarTime)}</div>`;
     if ((id === 'snowsat' || id === 'truecolor') && S.layers[id]) {
@@ -1088,7 +1218,7 @@ function maybeNotify() {
   const sent = store.get('notified', {});
   for (const i of [0, 1]) {
     const ds = addDays(S.today, i);
-    for (const r of S.results) {
+    for (const r of S.results.filter(inCountry)) {
       const d = r.days[i];
       const key = `${r.area.id}:${ds}`;
       if (d && d.sc.score >= 75 && !sent[key]) {
@@ -1206,11 +1336,23 @@ document.addEventListener('click', async e => {
     case 'day': S.dayIdx = +t.dataset.i; renderAreaMarkers(); renderView(); break;
     case 'view': setView(t.dataset.v); break;
     case 'aval-day': S.avalDay = +t.dataset.i; styleAval(); renderView(); break;
-    case 'aval-detail':
+    case 'aval-detail': {
+      const f = S.regions?.features.find(x => x.properties.id === t.dataset.id);
+      if (f) S.avalClosed.delete(f.properties.group || f.properties.country);
       map.closePopup(); setView('aval'); openSidebar();
-      setTimeout(() => document.getElementById('av-' + t.dataset.id)?.scrollIntoView({ behavior: 'smooth' }), 50);
+      scrollViewTo(document.getElementById('av-' + t.dataset.id), 54); // pod přilepený nadpis skupiny
       break;
-    case 'slope-from': map.closePopup(); slopeFromBulletin(t.dataset.id); break;
+    }
+    case 'aval-jump':
+      S.avalClosed.delete(t.dataset.g);
+      renderView();
+      scrollViewTo(document.getElementById('avg-' + t.dataset.g));
+      break;
+    case 'country':
+      S.country = t.dataset.c; store.set('country', S.country);
+      renderView(); maybeNotify();
+      break;
+    case 'slope-from': map.closePopup(); slopeFromBulletin(t.dataset.id, t.dataset.all === '1', t.dataset.area); break;
     case 'cam-full': e.preventDefault(); openCamModal(t.dataset.id); break;
     case 'cams-run': S.camRun = 0; analyzeCams(); renderView(); break;
     case 'route': focusRoute(t.dataset.osm); break;
@@ -1320,7 +1462,7 @@ map.on('click', e => {
     return `<tr><td>${c.label}</td><td><b>${num(v, c.dec)}</b> ${c.unit}</td></tr>`;
   }).join('');
   L.popup().setLatLng(e.latlng).setContent(`<div class="pp"><div class="pp-title">Předpověď v bodě</div>
-    <div class="muted">${shortDate(k.slice(0, 10))} ${k.slice(11, 16)} · mřížka ~25 km, výška terénu modelu</div>
+    <div class="muted">${shortDate(k.slice(0, 10))} ${k.slice(11, 16)} · mřížka ~30 km, výška terénu modelu</div>
     <table class="kv">${rows}</table></div>`).openOn(map);
 });
 

@@ -5,8 +5,11 @@ oblast a stránky jednotlivých kamer – a uloží název, polohu a zdroj kamer
 do static/data/webcams.json. Stahuje pomalu (s pauzou), spouští se jen
 občas, když chceš seznam kamer obnovit:
 
-    python tools/build_webcams.py
+    python tools/build_webcams.py                 # všechny oblasti znovu
+    python tools/build_webcams.py --country AT    # jen oblasti jedné země, ostatní kamery zůstanou
+    python tools/build_webcams.py --missing       # jen oblasti, které zatím žádnou kameru nemají
 """
+import argparse
 import html
 import json
 import math
@@ -22,9 +25,9 @@ OUT = ROOT / "static" / "data" / "webcams.json"
 
 UA = "SkialpApp/1.0 (personal use; webcam list builder)"
 DELAY_S = 0.8
-MAX_CAM_PAGES = 170
 KEEP_RADIUS_KM = 14
 EXPLORE_RADIUS_KM = 22
+MAX_PER_AREA = 8      # u velkých středisek jsou desítky kamer – bereme jen nejbližší
 
 
 def fetch(url):
@@ -72,10 +75,28 @@ def is_stale(cam):
 
 
 def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--country", help="projít jen oblasti této země (např. AT); ostatní kamery zůstanou")
+    ap.add_argument("--missing", action="store_true", help="projít jen oblasti bez kamer")
+    ap.add_argument("--max-pages", type=int, help="nejvyšší počet prohlédnutých stránek kamer")
+    args = ap.parse_args()
+
     areas = json.loads(AREAS.read_text(encoding="utf-8"))
+    existing = json.loads(OUT.read_text(encoding="utf-8")) if OUT.exists() else []
+    todo = areas
+    if args.country:
+        todo = [a for a in todo if a["country"] == args.country.upper()]
+    if args.missing:
+        have = {c["area"] for c in existing}
+        todo = [a for a in todo if a["id"] not in have]
+    if not todo:
+        print("Žádná oblast k projití.")
+        return 0
+    todo_ids = {a["id"] for a in todo}
+    max_pages = args.max_pages or 60 + 7 * len(todo)
     queue, seen, cams = [], set(), {}
 
-    for a in areas:
+    for a in todo:
         url = f"https://www.ventusky.com/{a['lat']:.3f};{a['lon']:.3f}"
         try:
             page = fetch(url)
@@ -83,7 +104,7 @@ def main():
             print(f"  ! {a['id']}: {e}")
             continue
         ids = list(dict.fromkeys(re.findall(r"webcam-(\d+)(?![\d/])", page)))
-        print(f"{a['id']}: {len(ids)} kamer v okolí")
+        print(f"{a['id']}: {len(ids)} kamer v okolí", flush=True)
         for i in ids:
             if i not in seen:
                 seen.add(i)
@@ -91,7 +112,7 @@ def main():
         time.sleep(DELAY_S)
 
     fetched = 0
-    while queue and fetched < MAX_CAM_PAGES:
+    while queue and fetched < max_pages:
         cam_id = queue.pop(0)
         try:
             cam = parse_cam(cam_id, fetch(f"https://www.ventusky.com/webcam-{cam_id}"))
@@ -102,24 +123,40 @@ def main():
         time.sleep(DELAY_S)
         if not cam:
             continue
+        # kamera patří k nejbližší oblasti ze všech – ne jen z těch právě procházených
         area, d = nearest_area(areas, cam["lat"], cam["lon"])
         cam["area"], cam["distKm"] = area["id"], round(d, 1)
         cams[cam_id] = cam
-        print(f"  {cam['name']} ({d:.1f} km od {area['id']}) {cam['freshness']}")
-        if d <= EXPLORE_RADIUS_KM:
+        print(f"  {cam['name']} ({d:.1f} km od {area['id']}) {cam['freshness']}", flush=True)
+        if d <= EXPLORE_RADIUS_KM and area["id"] in todo_ids:
             for n in cam["nearby"]:
                 if n not in seen:
                     seen.add(n)
                     queue.append(n)
 
-    keep = [
-        {k: v for k, v in c.items() if k not in ("nearby", "quality")}
-        for c in cams.values()
-        if c["distKm"] <= KEEP_RADIUS_KM and not is_stale(c)
-    ]
-    keep.sort(key=lambda c: (c["area"], c["distKm"]))
+    found = sorted(
+        ({k: v for k, v in c.items() if k not in ("nearby", "quality")}
+         for c in cams.values()
+         if c["area"] in todo_ids and c["distKm"] <= KEEP_RADIUS_KM and not is_stale(c)),
+        key=lambda c: (c["area"], c["distKm"]))
+    per_area = {}
+    for c in found:
+        per_area.setdefault(c["area"], [])
+        if len(per_area[c["area"]]) < MAX_PER_AREA:
+            per_area[c["area"]].append(c)
+
+    # kamery oblastí, které jsme neprocházeli, zůstávají beze změny
+    order = {a["id"]: i for i, a in enumerate(areas)}
+    keep = [c for c in existing if c["area"] not in todo_ids and c["area"] in order]
+    keep += [c for cs in per_area.values() for c in cs]
+    keep.sort(key=lambda c: (order[c["area"]], c["distKm"]))
     OUT.write_text(json.dumps(keep, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"\nUloženo {len(keep)} kamer (prohledáno {fetched}) -> {OUT}")
+    without = [a["id"] for a in todo if a["id"] not in per_area]
+    print(f"\nNově {sum(len(v) for v in per_area.values())} kamer pro {len(per_area)} oblastí (prohledáno {fetched} stránek), "
+          f"celkem {len(keep)} -> {OUT}")
+    if without:
+        print("Bez kamery: " + ", ".join(without))
+    return 0
 
 
 if __name__ == "__main__":

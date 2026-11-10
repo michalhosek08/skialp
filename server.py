@@ -1,11 +1,11 @@
-"""Skialp CZ/SK – lokální server.
+"""Skialp CZ/SK/AT – lokální server.
 
 Servíruje webovou aplikaci (složka static/) a pro ni stahuje, ukládá do cache
 a průběžně obnovuje data z veřejných zdrojů:
 
-  * předpověď počasí pro skialpové oblasti a mřížku nad ČR+SR (Open-Meteo)
-  * lavinové předpovědi HS ČR a HZS SR (EAWS, formát CAAML)
-  * měření horských stanic ČHMÚ a SHMÚ
+  * předpověď počasí pro skialpové oblasti a mřížku nad ČR, SR a Rakouskem (Open-Meteo)
+  * lavinové předpovědi HS ČR, HZS SR a rakouských lavinových služeb (EAWS, formát CAAML)
+  * měření horských stanic ČHMÚ, SHMÚ a GeoSphere Austria
   * skialpové trasy z OpenStreetMap (Overpass API)
   * obrázky webkamer a výškový model pro výpočet sklonu svahů
 
@@ -18,6 +18,7 @@ import datetime as dt
 import gzip
 import hashlib
 import json
+import math
 import mimetypes
 import re
 import sys
@@ -112,31 +113,48 @@ class Cache:
         with self.glock:
             return self.locks.setdefault(key, threading.Lock())
 
-    def get(self, key, ttl, producer, disk=False):
-        """Vrátí (hodnota, čas_aktualizace). Při chybě vrátí poslední známá data."""
+    @staticmethod
+    def _path(key):
+        return CACHE / (re.sub(r"[^\w.-]", "_", key) + ".json")
+
+    def _from_disk(self, key):
+        path = self._path(key)
+        if not path.exists():
+            return None
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            return self.items.setdefault(key, (stored["value"], stored["ts"]))
+        except Exception:  # noqa: BLE001
+            return None
+
+    def get(self, key, ttl, producer, disk=False, stale_ok=False):
+        """Vrátí (hodnota, čas_aktualizace). Při chybě vrátí poslední známá data.
+
+        stale_ok: existují-li jakákoli (i zastaralá) data, vrátí je hned a nic nestahuje –
+        pro pomalé zdroje, které obnovuje smyčka na pozadí.
+        """
         it = self.items.get(key)
         if it and time.time() - it[1] < ttl:
             return it
+        if stale_ok:
+            it = it or (self._from_disk(key) if disk else None)
+            if it:
+                return it
         with self._lock(key):
             it = self.items.get(key)
             if it and time.time() - it[1] < ttl:
                 return it
-            path = CACHE / (re.sub(r"[^\w.-]", "_", key) + ".json")
-            if not it and disk and path.exists():
-                try:
-                    stored = json.loads(path.read_text(encoding="utf-8"))
-                    it = (stored["value"], stored["ts"])
-                    self.items[key] = it
-                    if time.time() - it[1] < ttl:
-                        return it
-                except Exception:  # noqa: BLE001
-                    pass
+            if not it and disk:
+                it = self._from_disk(key)
+                if it and time.time() - it[1] < ttl:
+                    return it
             try:
                 value = producer()
                 it = (value, time.time())
                 self.items[key] = it
                 if disk:
-                    path.write_text(json.dumps({"ts": it[1], "value": value}, ensure_ascii=False), encoding="utf-8")
+                    self._path(key).write_text(json.dumps({"ts": it[1], "value": value}, ensure_ascii=False),
+                                               encoding="utf-8")
                 return it
             except Exception as e:  # noqa: BLE001
                 log(f"! {key}: {e}")
@@ -179,19 +197,23 @@ def om_period(date, before, after):
 AREA_VARS = ("temperature_2m,precipitation,snowfall,rain,snow_depth,wind_speed_10m,wind_gusts_10m,"
              "wind_direction_10m,cloud_cover,visibility,freezing_level_height,weather_code")
 GRID_VARS = "temperature_2m,precipitation,snowfall,snow_depth,wind_gusts_10m"
-GRID_BBOX = (47.70, 51.10, 12.00, 22.60)  # lat_min, lat_max, lon_min, lon_max
-GRID_DLAT, GRID_DLON = 0.25, 0.35  # ~465 bodů – drží se v denním limitu Open-Meteo
+GRID_BBOX = (46.30, 51.10, 9.50, 22.70)  # lat_min, lat_max, lon_min, lon_max (ČR, SR, Rakousko)
+GRID_DLAT, GRID_DLON = 0.30, 0.40  # 17 × 34 = 578 bodů – drží se v denním limitu Open-Meteo
+GRID_PAUSE_S = 13  # pauza mezi dávkami po 100 bodech: Open-Meteo dovolí 600 dotazů (bodů) za minutu
 
 
-def om_multi(lats, lons, params, elevs=None, chunk=60, base=OM):
+def om_multi(lats, lons, params, elevs=None, chunk=60, base=OM, pause=0):
     out = []
     for i in range(0, len(lats), chunk):
+        if i and pause:
+            time.sleep(pause)
         q = dict(params)
         q["latitude"] = ",".join(f"{x:.4f}" for x in lats[i:i + chunk])
         q["longitude"] = ",".join(f"{x:.4f}" for x in lons[i:i + chunk])
         if elevs:
             q["elevation"] = ",".join(str(int(e)) for e in elevs[i:i + chunk])
-        res = http_json(base + "?" + urllib.parse.urlencode(q), timeout=90)
+        # archiv (režim historie) umí první dotaz vyřizovat i přes minutu
+        res = http_json(base + "?" + urllib.parse.urlencode(q), timeout=90 if base == OM else 180)
         out.extend(res if isinstance(res, list) else [res])
     return out
 
@@ -213,8 +235,8 @@ def grid_points():
     lat0, lat1, lon0, lon1 = GRID_BBOX
     nlat = int(round((lat1 - lat0) / GRID_DLAT)) + 1
     nlon = int(round((lon1 - lon0) / GRID_DLON)) + 1
-    lats = [lat0 + i * GRID_DLAT for i in range(nlat)]
-    lons = [lon0 + j * GRID_DLON for j in range(nlon)]
+    lats = [round(lat0 + i * GRID_DLAT, 4) for i in range(nlat)]
+    lons = [round(lon0 + j * GRID_DLON, 4) for j in range(nlon)]
     return lats, lons
 
 
@@ -224,7 +246,7 @@ def produce_grid(date=None):
     plon = [lo for _ in lats for lo in lons]
     base, period = om_period(date, 1, 2)
     res = om_multi(plat, plon, {"hourly": GRID_VARS, "timezone": "Europe/Prague", "wind_speed_unit": "kmh",
-                                **period}, chunk=100, base=base)
+                                **period}, chunk=100, base=base, pause=GRID_PAUSE_S)
     times = res[0]["hourly"]["time"]
     fields = {}
     for v in GRID_VARS.split(","):
@@ -236,27 +258,37 @@ def produce_grid(date=None):
 
 
 # --------------------------------------------------------------------------
-# Lavinové předpovědi – EAWS / CAAML (HS ČR, HZS SR)
+# Lavinové předpovědi – EAWS / CAAML (HS ČR, HZS SR, rakouské zemské lavinové služby)
 # --------------------------------------------------------------------------
 
 EAWS = "https://static.avalanche.report/eaws_bulletins"
 LEVELS = {"low": 1, "moderate": 2, "considerable": 3, "high": 4, "very_high": 5, "no_rating": 0, "no_snow": 0}
 
 
-def fetch_bulletins(day):
+# jeden soubor na stát, v Rakousku na spolkovou zemi (Korutany … Vorarlbersko)
+BULLETIN_SOURCES = ("CZ", "SK", "AT-02", "AT-03", "AT-04", "AT-05", "AT-06", "AT-07", "AT-08")
+
+
+def _fetch_bulletin_file(day, src):
+    try:
+        data = http_json(f"{EAWS}/{day}/{day}-{src}.json", timeout=30)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:  # předpověď na ten den (zatím) nevyšla
+            return []
+        raise
     out = []
-    for cc in ("CZ", "SK"):
-        try:
-            data = http_json(f"{EAWS}/{day}/{day}-{cc}.json", timeout=30)
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                continue
-            raise
-        for b in data.get("bulletins", []):
-            b["_country"] = cc
-            b["_day"] = day
-            out.append(b)
+    for b in data.get("bulletins", []):
+        b["_country"] = src[:2]
+        b["_group"] = src
+        b["_day"] = day
+        out.append(b)
     return out
+
+
+def fetch_bulletins(day):
+    with ThreadPoolExecutor(5) as ex:
+        parts = list(ex.map(lambda src: _fetch_bulletin_file(day, src), BULLETIN_SOURCES))
+    return [b for part in parts for b in part]
 
 
 def produce_avalanche(date=None):
@@ -279,30 +311,33 @@ def produce_avalanche(date=None):
     return result
 
 
-def _has_czsk_rating(day):
+def _has_rating(day):
     try:
         r = http_json(f"{EAWS}/{day.isoformat()}/{day.isoformat()}.ratings.json", timeout=20)
     except Exception:  # noqa: BLE001
         return False
-    return any(k.startswith(("CZ-", "SK-")) and ":" not in k for k in r.get("maxDangerRatings", {}))
+    return any(k.startswith(("CZ-", "SK-", "AT-")) and ":" not in k for k in r.get("maxDangerRatings", {}))
 
 
 def find_last_bulletin_day():
-    """Datum poslední vydané předpovědi pro CZ/SK (hrubě po týdnech, pak po dnech)."""
+    """Datum poslední vydané předpovědi (posledních 5 týdnů po dnech, starší hrubě po týdnech)."""
     d = now_local().date()
-    for week in range(1, 40):
+    for i in range(1, 36):  # ojedinělé podzimní předpovědi by týdenní krok minul
+        if _has_rating(d - dt.timedelta(days=i)):
+            return (d - dt.timedelta(days=i)).isoformat()
+    for week in range(5, 40):
         probe = d - dt.timedelta(days=7 * week)
-        if _has_czsk_rating(probe):
+        if _has_rating(probe):
             last = probe
             for i in range(1, 7):
-                if _has_czsk_rating(probe + dt.timedelta(days=i)):
+                if _has_rating(probe + dt.timedelta(days=i)):
                     last = probe + dt.timedelta(days=i)
             return last.isoformat()
     return None
 
 
 # --------------------------------------------------------------------------
-# Měření horských stanic (ČHMÚ, SHMÚ)
+# Měření horských stanic (ČHMÚ, SHMÚ, GeoSphere Austria)
 # --------------------------------------------------------------------------
 
 CHMI_STATIONS = {
@@ -375,6 +410,63 @@ def produce_stations():
         out.extend(_shmu())
     except Exception as e:  # noqa: BLE001
         log("! SHMÚ:", e)
+    try:
+        out.extend(_geosphere())
+    except Exception as e:  # noqa: BLE001
+        log("! GeoSphere:", e)
+    return out
+
+
+GEOSPHERE = "https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min"
+GEOSPHERE_MIN_ALT = 1100  # jen horské stanice
+
+
+def _geosphere_meta():
+    """Seznam rakouských horských stanic (mění se zřídka – drží se týden)."""
+    def nice(raw):  # 'SONNBLICK - AUTOM.' -> 'Sonnblick', 'ST.ANTON/ARLBERG' -> 'St.Anton / Arlberg'
+        name = re.sub(r"\s*-\s*AUTOM\.?|\s*\(RADAR\)", "", raw).strip()
+        return re.sub(r"\s*/\s*", " / ", name).title()
+    j = http_json(GEOSPHERE + "/metadata", timeout=40)
+    return [{"id": str(st["id"]), "name": nice(st["name"]), "lat": round(st["lat"], 5), "lon": round(st["lon"], 5),
+             "elev": round(st["altitude"])}
+            for st in j.get("stations", [])
+            if st.get("is_active", True) and (st.get("altitude") or 0) >= GEOSPHERE_MIN_ALT]
+
+
+def _geosphere():
+    meta = cache.get("geosphere-meta", 7 * 86400, _geosphere_meta, disk=True)[0]
+    if not meta:
+        return []
+    q = urllib.parse.urlencode({"parameters": "TL,FF,FFX,DD,RF,SCHNEE", "output_format": "geojson",
+                                "station_ids": ",".join(m["id"] for m in meta)})
+    j = http_json(f"{GEOSPHERE}?{q}", timeout=40)
+    stamps = [dt.datetime.fromisoformat(t) for t in j.get("timestamps") or []]
+    fresh_from = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=3)
+    by_id = {m["id"]: m for m in meta}
+    out = []
+    for f in j.get("features", []):
+        props = f.get("properties", {})
+        m = by_id.get(str(props.get("station")))
+        if not m:
+            continue
+
+        def last(key):  # poslední nedávná hodnota a její čas
+            data = (props.get("parameters", {}).get(key) or {}).get("data") or []
+            for i in range(min(len(data), len(stamps)) - 1, -1, -1):
+                if data[i] is not None and stamps[i] >= fresh_from:
+                    return data[i], stamps[i]
+            return None, None
+
+        t, when = last("TL")
+        if t is None:
+            continue
+        snow = last("SCHNEE")[0]
+        out.append({
+            "id": f"gsa-{m['id']}", "name": m["name"], "lat": m["lat"], "lon": m["lon"], "elev": m["elev"],
+            "source": "GeoSphere Austria", "time": when.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "t": t, "wind": last("FF")[0], "gust": last("FFX")[0], "dir": last("DD")[0], "rh": last("RF")[0],
+            "precip1h": None, "snow": snow if snow is not None and 0 <= snow < 800 else None,
+        })
     return out
 
 
@@ -424,32 +516,70 @@ OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private
 ROUTES_FALLBACK = DATA / "routes_fallback.json"  # snímek tras pro případ, že Overpass nejde
 
 
+# Česko, Slovensko a Rakousko celé + původní výřez (polská strana Krkonoš a Tater, Bavorsko u Šumavy)
+ROUTES_QUERY = ('[out:json][timeout:170];'
+                'area["ISO3166-1"~"^(AT|CZ|SK)$"][admin_level=2]->.a;'
+                '(way["piste:type"="skitour"](area.a);relation["piste:type"="skitour"](area.a);'
+                'way["piste:type"="skitour"](47.7,12.0,51.1,22.6);'
+                'relation["piste:type"="skitour"](47.7,12.0,51.1,22.6););out geom;')
+
+
+def _thin(line, tol_m=4.0):
+    """Zjednoduší lomenou čáru (Douglas–Peucker, tolerance v metrech) – menší soubor, stejný tvar."""
+    if len(line) < 3:
+        return line
+    kx = 111320 * math.cos(math.radians(line[0][1]))
+    pts = [(x * kx, y * 110540) for x, y in line]
+    keep = [False] * len(line)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(line) - 1)]
+    while stack:
+        a, b = stack.pop()
+        (x1, y1), (x2, y2) = pts[a], pts[b]
+        dx, dy = x2 - x1, y2 - y1
+        l2 = dx * dx + dy * dy
+        best, idx = tol_m, -1
+        for i in range(a + 1, b):
+            x, y = pts[i]
+            t = max(0.0, min(1.0, ((x - x1) * dx + (y - y1) * dy) / l2)) if l2 else 0.0
+            d = math.hypot(x - (x1 + t * dx), y - (y1 + t * dy))
+            if d > best:
+                best, idx = d, i
+        if idx >= 0:
+            keep[idx] = True
+            stack += [(a, idx), (idx, b)]
+    return [p for p, k in zip(line, keep) if k]
+
+
 def produce_routes():
-    q = ('[out:json][timeout:120];'
-         '(way["piste:type"="skitour"](47.7,12.0,51.1,22.6);'
-         'relation["piste:type"="skitour"](47.7,12.0,51.1,22.6););out geom;')
     data = None
-    for url in OVERPASS:
-        try:
-            body, _ = http_get(url, timeout=60, data=urllib.parse.urlencode({"data": q}).encode())
+    for n, url in enumerate(OVERPASS):
+        try:  # hlavní server potřebuje na tento dotaz přes minutu; na záložních déle nečekáme
+            body, _ = http_get(url, timeout=200 if n == 0 else 100,
+                               data=urllib.parse.urlencode({"data": ROUTES_QUERY}).encode())
             data = json.loads(body.decode("utf-8"))
             break
         except Exception as e:  # noqa: BLE001
             log("! Overpass", url, e)
     if data is None:
         raise RuntimeError("Overpass nedostupný")
-    if len(data.get("elements", [])) < 50:
-        raise RuntimeError(f"Overpass vrátil podezřele málo tras ({len(data.get('elements', []))})")
+    elements = data.get("elements", [])
+    if data.get("remark") or len(elements) < 500:  # vypršel čas dotazu / neúplná odpověď
+        raise RuntimeError(f"Overpass vrátil neúplná data ({len(elements)} prvků; {data.get('remark', '')[:80]})")
+    line_of = lambda geom: _thin([[round(p["lon"], 5), round(p["lat"], 5)] for p in geom])  # noqa: E731
+    # úseky, které jsou součástí pojmenované trasy (relace), se samostatně nekreslí
+    in_relation = {m["ref"] for el in elements if el["type"] == "relation"
+                   for m in el.get("members", []) if m.get("type") == "way" and m.get("geometry")}
     feats = []
-    for el in data.get("elements", []):
+    for el in elements:
         tags = el.get("tags", {})
         lines = []
-        if el["type"] == "way" and el.get("geometry"):
-            lines.append([[round(p["lon"], 5), round(p["lat"], 5)] for p in el["geometry"]])
+        if el["type"] == "way" and el.get("geometry") and el["id"] not in in_relation:
+            lines.append(line_of(el["geometry"]))
         elif el["type"] == "relation":
             for m in el.get("members", []):
                 if m.get("type") == "way" and m.get("geometry"):
-                    lines.append([[round(p["lon"], 5), round(p["lat"], 5)] for p in m["geometry"]])
+                    lines.append(line_of(m["geometry"]))
         if not lines:
             continue
         feats.append({
@@ -535,37 +665,75 @@ DEM_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.p
 # --------------------------------------------------------------------------
 
 TTL = {
-    "forecast": 30 * 60,
+    "forecast": 60 * 60,   # hodinová data – častěji se nemění (a šetří denní limit Open-Meteo)
     "grid": 3 * 3600,
     "avalanche": 20 * 60,
     "stations": 10 * 60,
     "routes": 24 * 3600,
     "radar": 5 * 60,
 }
-PRODUCERS = {
+PRODUCERS = {  # v pořadí obnovy na pozadí – pomalé zdroje (mapa, trasy) až nakonec
     "forecast": (produce_forecast, True),
-    "grid": (produce_grid, True),
     "avalanche": (produce_avalanche, True),
     "stations": (produce_stations, False),
-    "routes": (produce_routes_or_fallback, True),
     "radar": (lambda: http_json("https://api.rainviewer.com/public/weather-maps.json"), False),
+    "grid": (produce_grid, True),
+    "routes": (produce_routes_or_fallback, True),
 }
+SLOW = {"grid", "routes"}  # stahují se dlouho: prohlížeč dostane poslední známá data hned
+
+
+def signature(name):
+    """Otisk rozsahu dat. Když se změní (nové oblasti, větší mapa), stará cache se nepoužije."""
+    if name == "forecast":
+        return hashlib.sha1(",".join(a["id"] for a in AREAS).encode()).hexdigest()[:8]
+    if name == "grid":
+        lats, lons = grid_points()
+        return f"{len(lats)}x{len(lons)}_{lats[0]}_{lons[0]}"
+    if name == "routes":
+        return "at-cz-sk"
+    if name == "avalanche":
+        return "-".join(sorted({src[:2] for src in BULLETIN_SOURCES})).lower()
+    return ""
+
+
+def cache_key(name):
+    sig = signature(name)
+    return f"{name}_{sig}" if sig else name
 
 
 DATED = {"forecast", "grid", "avalanche"}  # zdroje, které umí režim historie
 
 
-def get_data(name, force=False, date=None):
+def get_data(name, force=False, date=None, stale_ok=False):
     fn, disk = PRODUCERS[name]
     if date and name in DATED:
-        return cache.get(f"{name}@{date}", 7 * 86400, lambda: fn(date), disk=True)
-    # ruční obnovení: data starší než 2 minuty se stáhnou znovu (trasy max. 1× za hodinu)
-    ttl = (3600 if name == "routes" else 120) if force else TTL[name]
-    return cache.get(name, ttl, fn, disk=disk)
+        return cache.get(f"{cache_key(name)}@{date}", 7 * 86400, lambda: fn(date), disk=True)
+    # ruční obnovení: data starší než 2 minuty se stáhnou znovu (mapa a trasy max. 1× za hodinu)
+    ttl = (3600 if name in SLOW else 120) if force else TTL[name]
+    return cache.get(cache_key(name), ttl, fn, disk=disk, stale_ok=stale_ok and name in SLOW)
+
+
+def cleanup_cam_cache(max_age_s=2 * 3600):
+    """Smaže staré snímky webkamer (každých 5 minut vzniká pro každou kameru nový soubor)."""
+    folder = BIN_CACHE / "cam"
+    if not folder.exists():
+        return
+    now = time.time()
+    for f in folder.iterdir():
+        try:
+            if now - f.stat().st_mtime > max_age_s:
+                f.unlink()
+        except OSError:
+            pass
 
 
 def background_loop():
+    rounds = 0
     while True:
+        if rounds % 30 == 0:
+            cleanup_cam_cache()
+        rounds += 1
         for name in PRODUCERS:
             try:
                 get_data(name)
@@ -607,7 +775,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         try:
             self.route()
-        except BrokenPipeError:
+        except ConnectionError:  # prohlížeč mezitím spojení zavřel (přechod na jinou stránku)
             pass
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
@@ -627,13 +795,13 @@ class Handler(BaseHTTPRequestHandler):
             date = qs.get("date", [""])[0]
             if date and not (re.fullmatch(r"\d{4}-\d{2}-\d{2}", date) and "2022-01-01" <= date < now_local().date().isoformat()):
                 return self.send_json({"error": "neplatné datum (YYYY-MM-DD, v minulosti od 2022)"}, 400)
-            value, ts = get_data(name, force=qs.get("force", ["0"])[0] == "1", date=date or None)
+            value, ts = get_data(name, force=qs.get("force", ["0"])[0] == "1", date=date or None, stale_ok=True)
             return self.send_json({"updated": ts, "data": value})
 
         if p == "/api/meta":
             return self.send_json({
                 "areas": AREAS, "webcams": WEBCAMS, "serverTime": time.time(),
-                "updated": {k: cache.peek_ts(k) for k in PRODUCERS},
+                "updated": {k: cache.peek_ts(cache_key(k)) for k in PRODUCERS},
                 "access": ACCESS,
             })
 
@@ -784,7 +952,7 @@ def lan_ip():
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Skialp CZ/SK – lokální server")
+    ap = argparse.ArgumentParser(description="Skialp CZ/SK/AT – lokální server")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--lan", action="store_true", help="naslouchat i v místní síti (mobil)")
     ap.add_argument("--tailscale", action="store_true", help="zpřístupnit přes Tailscale (mobil i mimo domov)")
@@ -834,7 +1002,7 @@ def main():
             webbrowser.open(url)
         return 1
     threading.Thread(target=background_loop, daemon=True).start()
-    log(f"Skialp CZ/SK běží na {url}  (ukončení: Ctrl+C)")
+    log(f"Skialp běží na {url}  (ukončení: Ctrl+C)")
     print_access()
     if not args.no_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()

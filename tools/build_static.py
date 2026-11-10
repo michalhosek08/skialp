@@ -28,7 +28,7 @@ import server  # noqa: E402  – sdílíme stahování a zpracování dat se ser
 
 # zdroj: (funkce, jak dlouho lze převzít z předchozí verze [s]; 0 = stáhnout pokaždé)
 SOURCES = {
-    "forecast": (server.produce_forecast, 0),
+    "forecast": (server.produce_forecast, 50 * 60),
     "avalanche": (server.produce_avalanche, 0),
     "stations": (server.produce_stations, 0),
     "grid": (server.produce_grid, 3 * 3600 - 600),
@@ -186,12 +186,18 @@ def main():
 
     for name, (producer, reuse_s) in SOURCES.items():
         prev = prev_aval if name == "avalanche" else fetch_prev(args.prev_url, name)
-        if prev and prev.get("retryAfter", 0) > now:  # zdroj nedávno nešel – zkusí se později
+        sig = server.signature(name)
+        # předchozí data jiného rozsahu (méně oblastí, menší mapa) nepřebíráme – jen jako nouzi při výpadku
+        same = bool(prev) and prev.get("sig", "") == sig
+        if not same and prev:
+            log(f"{name}: předchozí data mají jiný rozsah – stahuji znovu")
+            prev = {k: v for k, v in prev.items() if k != "retryAfter"}
+        if same and prev.get("retryAfter", 0) > now:  # zdroj nedávno nešel – zkusí se později
             write_json(out / "api" / f"{name}.json", prev)
             status[name] = {"updated": prev.get("updated"), "reused": True}
             log(f"{name}: převzato (zdroj nedostupný, další pokus po {time.strftime('%H:%M', time.localtime(prev['retryAfter']))})")
             continue
-        if prev and reuse_s and now - prev.get("updated", 0) < reuse_s:
+        if same and reuse_s and now - prev.get("updated", 0) < reuse_s:
             write_json(out / "api" / f"{name}.json", prev)
             status[name] = {"updated": prev["updated"], "reused": True}
             log(f"{name}: převzato (stáří {int((now - prev['updated']) / 60)} min)")
@@ -201,14 +207,14 @@ def main():
             data = producer()
             if name == "avalanche" and "lastPublished" in data:
                 data["lastCheck"] = server.cache.peek_ts("avalanche-last")
-            write_json(out / "api" / f"{name}.json", {"updated": time.time(), "data": data})
+            write_json(out / "api" / f"{name}.json", {"updated": time.time(), "sig": sig, "data": data})
             status[name] = {"updated": time.time()}
             log(f"{name}: staženo ({time.time() - t0:.1f} s)")
         except Exception as e:  # noqa: BLE001
             status[name] = {"error": str(e)[:200]}
-            if not prev and name == "routes" and server.ROUTES_FALLBACK.exists():
-                # uložený snímek má staré datum, takže se příště zkusí Overpass znovu
-                prev = json.loads(server.ROUTES_FALLBACK.read_text(encoding="utf-8"))
+            if not same and name == "routes" and server.ROUTES_FALLBACK.exists():
+                # uložený snímek tras v aktuálním rozsahu (má staré datum, časem se zkusí Overpass znovu)
+                prev = {**json.loads(server.ROUTES_FALLBACK.read_text(encoding="utf-8")), "sig": sig}
             if prev:
                 if reuse_s:  # méně časté zdroje (trasy, mapa) při výpadku zkusit znovu až později
                     prev = {**prev, "retryAfter": now + min(6 * 3600, reuse_s / 2)}

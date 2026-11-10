@@ -237,13 +237,15 @@ export function buildOverview(results, dayIdx, aval, today) {
   if (regs.length) {
     const maxL = Math.max(...regs.map(([, v]) => v));
     const names = regs.filter(([, v]) => v === maxL).map(([k]) => aval.names[k] || k);
-    lines.push(`<b>Laviny:</b> nejvyšší stupeň ${maxL} (${DANGER[maxL].name}) – ${names.join(', ')}.`);
+    const more = names.length - 4;
+    lines.push(`<b>Laviny:</b> nejvyšší stupeň ${maxL} (${DANGER[maxL].name}) – ${names.slice(0, 4).join(', ')}${
+      more > 0 ? ` a ${more} ${plural(more, 'další region', 'další regiony', 'dalších regionů')}` : ''}.`);
   } else if (aval) {
     lines.push(`<b>Laviny:</b> lavinové předpovědi se ${season === 'off' ? 'mimo sezónu ' : ''}zatím nevydávají${aval.lastPublished ? ` (poslední vyšla ${new Date(aval.lastPublished).toLocaleDateString('cs-CZ')})` : ''}. Hodnoť terén sám.`);
   }
 
   if (bestDay !== dayIdx && dayAvg[bestDay] > dayAvg[dayIdx] + 8) {
-    lines.push(`Nejlepší vyhlídky jsou <b>${dayLabel(addDays(today, bestDay), today).toLowerCase()}</b>.`);
+    lines.push(`Nejlepší vyhlídky jsou <b>${dayLabel(addDays(today, bestDay), today).toLowerCase().replace(/\.$/, '')}</b>.`);
   }
 
   // titulek
